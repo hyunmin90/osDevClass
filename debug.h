@@ -5,6 +5,13 @@
 #ifndef _DEBUG_H
 #define _DEBUG_H
 
+#define DEBUG_MODE 0
+
+#ifndef LOG
+#define LOG(str, ...)                                                   \
+    do { if (DEBUG_MODE) printf(str,  ## __VA_ARGS__); } while (0)
+#endif
+
 #ifndef ASM
 
 #ifdef DEBUG

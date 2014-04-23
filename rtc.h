@@ -35,20 +35,20 @@ Represents the bit 6 of Register B */
 #define CBIT1 0x0F //Clear the bits not related.
 #define CBIT2 0xF0 //Clear bits not related
 
-
+#define NUM_FREQ	11
 
 /* Handle RTC */
 void rtc_handler(int i);
 /* Initialize RTC */
 void rtc_init();
 /*Open rtc. Set the freq to 2hz*/
-void rtc_open();
+int32_t rtc_open(int32_t dummy);
 /*Read from RTC. Wait until rtc interrupt occurs*/
-int rtc_read();
+int32_t rtc_read();
 /*Write the frequency desired */
-int rtc_write(int32_t frequencyToSet);
+int32_t rtc_write(uint32_t dummy, uint32_t dummy1, int32_t* freq_ptr, uint32_t dummy2);
 /*Close rtc*/
-int rtc_close();
+int32_t rtc_close();
 /*Test case for rtc open read write close*/
 void rtc_test();
 

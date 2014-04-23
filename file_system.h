@@ -16,21 +16,23 @@
 
 #define MAX_FILE_NAME_LENGTH 32
 #define FILE_HEADER_SIZE 40
+#define RESERVED_BYTE_BOOT 13
+#define RESERVED_BYTE_DENTRY 6
 
 /* File system's statistics information */
 typedef struct fs_stat_t {
     uint32_t num_dir_entries;
     uint32_t num_inodes;
     uint32_t num_data_blocks;
-    uint32_t reserved[13];
+    uint32_t reserved[RESERVED_BYTE_BOOT];
 } fs_stat_t;
 
 /* A single directory entry */
 typedef struct dentry_t {
-    uint8_t file_name[32];
+    uint8_t file_name[MAX_FILE_NAME_LENGTH];
     uint32_t file_type;
     uint32_t inode_idx;
-    uint32_t reserved[6];
+    uint32_t reserved[RESERVED_BYTE_DENTRY];
 } dentry_t;
 
 /* An inode that contains number of bytes in file and blocks' indexes */
@@ -67,6 +69,9 @@ int32_t open_file(const uint8_t* fname);
 int32_t read_file(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t length);
 int32_t write_file(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t length);
 int32_t close_file(inode_t* inode_ptr);
+
+int32_t read_file_wrapper(int32_t fd, uint8_t* buf, uint32_t length);
+int32_t read_dir_wrapper(int32_t fd, uint8_t* buf, uint32_t length);
 
 /* Open, read, write, close functions on directories for system call functions support */
 int32_t open_dir(const uint8_t* fname);

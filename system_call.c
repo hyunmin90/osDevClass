@@ -1,47 +1,280 @@
 #include "system_call.h"
 #include "lib.h"
 #include "syscall_exec.h"
+#include "file_system.h"
+#include "rtc.h"
+#include "pcb.h"
+#include "x86_desc.h"
+#include "debug.h"
 
-int32_t halt(uint8_t status)
+#define FD_ENTRY_MIN 2
+#define FD_ENTRY_MAX 7
+#define HALT_ARG_BITMASK 0xFF
+#define TASK_BEGIN_VIRT_ADDR 0x8048000
+
+extern void* halt_ret;
+extern file_ops_t file_ops_ptrs[FILE_OPS_PTRS_SIZE];
+extern inode_t* inodes;
+
+static const file_desc_t empty_file_desc;
+/* Halt Function
+   Halt System Call
+   Terminates Caller Process
+   Returns to Parent Process 
+   Input : status -- 
+   Output : Returns 1 if keycode is letter
+   			0 otherwise
+   Side Effect : Checks for a letter
+*/
+int32_t halt(uint32_t status)
 {
-	printf("%d\n", status);
-	printf("halt\n");
+	//status = status & HALT_ARG_BITMASK;
+	LOG("halt with status %d\n", status);
+
+	pcb_t* current_pcb_ptr = get_pcb_ptr();
+	pcb_t* parent_pcb_ptr = current_pcb_ptr->parent_pcb;
+
+	if(parent_pcb_ptr == NULL) {
+		LOG("No parent PCB pointer presents.\n");
+		return -1;
+	}
+	// TSS:esp0 <- parent's esp0
+	tss.esp0 = parent_pcb_ptr->esp0;
+	// TSS:ss0 <- parent's ss0
+	tss.ss0 = parent_pcb_ptr->ss0;
+	
+	// virtual memory cleanup: update CR3
+	set_cr3_reg(parent_pcb_ptr->pg_dir);
+	/* Clean up page directory */
+	if (cleanup_pg_dir(current_pcb_ptr->pg_dir) != 0) {
+		LOG("Fatal error while tearing down page directory.\n");
+	}
+
+	if(destroy_pcb_ptr(current_pcb_ptr) != 0) {
+		LOG("Cannot Destroy PCB_ptr no matching PCB found.\n");
+	}
+	/* update esp to point to top of parent's kernel stack
+	   update ebp
+	   Return Value */
+	asm volatile("movl %0, %%eax;"
+				 "movl %1, %%esp;"
+				 "movl %2, %%ebp;"::
+				 "a" ((int32_t)status), 
+				 "b" (parent_pcb_ptr->esp0),
+				 "c" (parent_pcb_ptr->ebp));
+
+	/* Jump to sys_exec */
+	asm volatile("jmp halt_ret");
+
+	/* Never reach here but just return 0 to avoid warning */
 	return 0;
 }
 
 int32_t sys_execute(syscall_struct_t syscall_struct)
 {
-	printf("execute\n");
+	LOG("sys_execute\n");
 	return do_execute(syscall_struct);
 }
 
+/* sys_read :
+  reads data from the keyboard, a file, device (RTC), or directory
+  Input : fd -- the integer index for file descriptor array
+  		  buf -- array to be filled in with read data
+		  nbytes -- the number of bytes to be read
+  Output : the number of bytes read,
+  		    or 0 to indicate that the end of the file has been reached
+  		    (for normal files and the directory).
+           -1 if failed(if command is out of reach)
+  Side Effect : None
+*/
 int32_t sys_read(int32_t fd, void* buf, int32_t nbytes)
 {
-	return 0;
+	LOG("sys_read\n");
+	// get current pcb
+	pcb_t* pcb = get_pcb_ptr();
+	/* Buffer Null Check */
+	if(buf == NULL)
+		return -1;
+	/* Check for out of range fd, or reads on unopened file descriptors or stdout */
+	if(fd > FD_ENTRY_MAX || fd < 0 || fd == 1 || ((pcb ->file_array)[fd]).flags == 0)
+		return -1;
+	// call read function and return number of bytes read
+	return (((pcb -> file_array)[fd]).file_ops -> read)(fd, buf, nbytes);
 }
 
+/* sys_write
+   writes data to keyboard,file, device (RTC), or directory
+   Input : fd -- the index in the file descriptor array
+   		   buf -- array with data to be written
+   		   nbytes -- the number of bytes to be written
+   Output : Returns the number of bytes written
+   			-1 on failure
+   Side Effect : None
+*/
 int32_t sys_write(int32_t fd, const void* buf, int32_t nbytes)
 {
-	return 0;
+	LOG("sys_write\n");
+	pcb_t* pcb = get_pcb_ptr();
+
+	/* Buffer Null Check */
+	if(buf == NULL)
+		return -1;
+	/* Checks for out of range fd, write on unopened file descriptor or stdin */ 
+	if(fd > FD_ENTRY_MAX || fd <= 0 || ((pcb -> file_array)[fd]).flags == 0)
+		return -1;
+
+	return (((pcb -> file_array)[fd]).file_ops -> write)(fd, 0, buf, nbytes);
 }
 
+/* sys_open
+   Opens the given file
+   Input : filename -- the name of file to be opened
+   Output : Return the index of the newly allocated file descriptor
+   			-1 on failure
+   Side Effect : Allocates an unused file descriptor 
+*/
 int32_t sys_open (const uint8_t* filename)
 {
-	return 0;
+	LOG("sys_open\n");
+	pcb_t* pcb_ptr = get_pcb_ptr();
+	int32_t (*open_ptr) (int32_t);
+
+	/* Find Free Space */
+	uint32_t fd_index = find_free_fd_index(pcb_ptr);
+	if(fd_index == -1){
+		LOG("No Free Space in File Array. Can't Open!");
+		return -1;
+	}
+	/* Check for existing filename */
+	dentry_t curr_file;
+	uint32_t i = read_dentry_by_name(filename, &curr_file);
+	if(i == -1)
+		return -1;
+
+	/* Update pcb according to filetype */
+	(pcb_ptr->file_array)[fd_index].flags = 1;
+	(pcb_ptr->file_array)[fd_index].file_position = 0;
+	if(curr_file.file_type == FILE_TYPE_RTC) {
+		(pcb_ptr->file_array)[fd_index].file_ops = &file_ops_ptrs[RTC_FILE_OPS_IDX];
+		(pcb_ptr->file_array)[fd_index].inode_ptr = NULL;
+	} else if (curr_file.file_type == FILE_TYPE_DIR) {
+		(pcb_ptr->file_array)[fd_index].file_ops = &file_ops_ptrs[DIR_FILE_OPS_IDX];
+		(pcb_ptr->file_array)[fd_index].inode_ptr = NULL;
+		(pcb_ptr->file_array)[fd_index].file_position = i;
+	} else {
+		(pcb_ptr->file_array)[fd_index].file_ops = &file_ops_ptrs[REG_FILE_OPS_IDX];
+		(pcb_ptr->file_array)[fd_index].inode_ptr = (inode_t*)open_file(filename);
+	}
+
+	/* Call Open Function */
+	open_ptr = (((pcb_ptr -> file_array)[fd_index]).file_ops -> open);
+	open_ptr((int32_t)filename);
+	
+	return fd_index;
 }
 
+/* sys_close
+   Closes the given file associated with the file descriptor
+   Input : fd -- the index of the file to be closed
+   Output : 0 on successful close
+   		    -1 on failure
+   Side Effect : Frees up the corresponding file descriptor
+*/
 int32_t sys_close (int32_t fd)
 {
+	LOG("sys_close\n");
+	
+	/* Check if out of bounds */
+	if(fd < FD_ENTRY_MIN || fd > FD_ENTRY_MAX)
+		return -1;
+
+	/* Check for closing unopened file descriptor */
+	pcb_t* pcb_ptr = get_pcb_ptr();
+	if(((pcb_ptr -> file_array)[fd].flags) == 0)
+		return -1;
+
+	/* Call Close */
+	int32_t (*close_ptr) (int32_t);
+	close_ptr = (((pcb_ptr -> file_array)[fd]).file_ops -> close);
+	close_ptr((int32_t)(pcb_ptr -> file_array[fd]).inode_ptr);
+
+	/* Empty out file array */
+	pcb_ptr -> file_array[fd] = empty_file_desc;
 	return 0;
 }
 
+/* Get Args
+   Get_Args System Call
+   Read Program's command line arguments 
+   Reads it in to user-level-buffer 
+   Input : User-Level-Buffer, Number of bytes to be read
+   Output : Returns 0 on sucess
+   			-1 on failure
+   Side Effect : NONE
+*/
 int32_t sys_getargs (uint8_t* buf, int32_t nbytes)
 {
-	return 0;
+	int i=0;
+	int bufferlength=0;
+	if(buf==NULL)
+		return -1;
+	pcb_t* current_pcb_ptr = get_pcb_ptr(); //get the current PCB
+	
+	for(i=0;i<nbytes;i++) //Checks the buffer length of current pointer's argument
+	{
+		if((current_pcb_ptr->cmd_args)[i]!=NULL)
+		{	bufferlength++; } //Increasing the buffer length
+		else
+			break;
+	}	
+	for(i = 0; i < bufferlength + 1; i++) //Copy the command argument to current pointer
+		buf[i] = (current_pcb_ptr -> cmd_args)[i];
+	
+	return 0; //return 0 on scucess
 }
 
+/*sys_vidmap :
+  maps the text-mode video memory into user space at a pre-set virtual address 
+  Input : screen_start - double pointer, which is supposed to point the beginning of
+  						  the text-mode video memory
+  Output : 0 if success
+           -1 if failed(if command is NULL or invalid)
+  Side Effect : screen_start will be updated to point the text-mode video memory
+*/
 int32_t sys_vidmap(uint8_t** screen_start)
 {
+	// null case
+	if(screen_start == NULL)
+		return -1;
+
+	// see if it fits into the virtual memory address (128MB - 132MB)
+	if((uint32_t) screen_start < (TASK_BEGIN_VIRT_ADDR) ||
+		(uint32_t)screen_start > TASK_BEGIN_VIRT_ADDR + PAGE_SIZE_4M)
+		return -1;
+
+	
+	// get current pcb and following page directory
+	pcb_t* pcb_ptr = get_pcb_ptr();
+	pde_t* current_pg_dir = pcb_ptr->pg_dir;
+
+	// get a page table from current page directory
+	// pick a space in virtual memory address, and use given physical address(0xB8000)
+	// the space should not be overlapped with 'important' part of the page directory,
+	// such as the one with kernel, or the user.
+	if(map_page_vid((TASK_BEGIN_VIRT_ADDR + PAGE_SIZE_4M), VIDEO,
+	 PAGING_USER_SUPERVISOR | PAGING_READ_WRITE | PAGING_GLOBAL_PAGE, current_pg_dir) != 0) {
+
+		LOG("Failed to map virtual memory for new process\n");
+        return -1;
+	}
+
+    // so the *screen_start can point to modified page table
+
+    *screen_start = (uint8_t*)(TASK_BEGIN_VIRT_ADDR + PAGE_SIZE_4M);
+
+    // or, do 4kb paging directly instead.
+    //*screen_start = (uint8_t*)(VIDEO);
+
 	return 0;
 }
 

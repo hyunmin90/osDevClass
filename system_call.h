@@ -38,9 +38,7 @@ typedef struct syscall_struct_t {
     uint16_t ss_pad;
 } syscall_struct_t;
 
-extern int32_t sys_restart_syscall();
-
-extern int32_t sys_halt(uint8_t status);
+extern int32_t halt(uint32_t status);
 
 extern int32_t sys_execute(syscall_struct_t syscall_struct);
 

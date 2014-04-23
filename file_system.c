@@ -3,6 +3,7 @@
 #include "file_system.h"
 #include "lib.h"
 #include "paging.h"
+#include "pcb.h"
 
 fs_stat_t fs_stat;
 dentry_t* dentries;
@@ -113,9 +114,9 @@ int32_t read_data(uint32_t inode, uint32_t offset, uint8_t* buf, uint32_t length
     /* Initialize number of bytes read to 0 */
     int32_t bytes_read = 0;
 
-    inode_t my_inode = inodes[inode];
+    inode_t* my_inode = &inodes[inode];
     /* Total number of bytes that can be read from the file */
-    int32_t my_inode_remaining_bytes = my_inode.length - offset;
+    int32_t my_inode_remaining_bytes = my_inode->length - offset;
 
     /* Initialize current block's position in inode using offset */
     uint32_t cur_block_num = offset / BLOCK_SIZE;
@@ -127,7 +128,7 @@ int32_t read_data(uint32_t inode, uint32_t offset, uint8_t* buf, uint32_t length
     */
     while (length > 0 && my_inode_remaining_bytes > 0) {
         /* current index of block in file system */
-        int32_t cur_block_index = my_inode.block_idx[cur_block_num];
+        int32_t cur_block_index = my_inode->block_idx[cur_block_num];
         if (cur_block_index >= fs_stat.num_data_blocks) {
             /* invalid block's index; Fail! */
             return -1;
@@ -153,7 +154,7 @@ int32_t read_data(uint32_t inode, uint32_t offset, uint8_t* buf, uint32_t length
         }
 
         /* Copy bytes */
-        memcpy((buf + bytes_read), (cur_block + cur_block_offset), num_bytes_to_copy);
+        memcpy((buf + bytes_read), ((uint8_t *)cur_block + cur_block_offset), num_bytes_to_copy);
         /* Decrement number of bytes left in file */
         my_inode_remaining_bytes -= num_bytes_to_copy;
         /* Decrement number of bytes to be read */
@@ -213,6 +214,16 @@ int32_t read_file(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t le
     }
 }
 
+int32_t read_file_wrapper(int32_t fd, uint8_t* buf, uint32_t length){
+  pcb_t* pcb = get_pcb_ptr();
+  inode_t* inode_ptr = (((pcb -> file_array)[fd]).inode_ptr);
+  uint32_t offset = (((pcb -> file_array)[fd]).file_position);
+
+  int32_t bytes_read = read_file(inode_ptr, offset, buf, length);
+  ((pcb -> file_array)[fd]).file_position += bytes_read;
+  return bytes_read;
+}
+
 /* write_file()
    Write data into a file
    It fails no matter what because the file system is read only
@@ -241,49 +252,50 @@ int32_t close_file(inode_t* inode_ptr) {
 /* open_dir()
    Open a directory with the given file name
    Input : fname -- file name string
-   Output : dir_index, representing the requested directory's index among directories
-            in the file system
+   Output : dir_index, representing the requested directory's directory entry index
            -1 if the directory with the given name does not exists, or fname is NULL
    Side Effects : None
  */
 int32_t open_dir(const uint8_t* fname) {
     dentry_t dentry;
-    if(fname == NULL || read_dentry_by_name(fname, &dentry) == -1) {
+    if(fname == NULL || 
+        read_dentry_by_name(fname, &dentry) == -1 ||
+        dentry.file_type != FILE_TYPE_DIR) {
         return -1;
     } else {
+        int i;
         uint32_t fname_length = strlen((int8_t*) fname);
         if (fname_length > MAX_FILE_NAME_LENGTH) {
             /* Given file name is too long to even compare.
                We do this to avoid reading into file_type value as well
                in case fname is too long.
-            */
+             */
             return -1;
-        }
-        
-        else {
-            int i;
-            int dir_index = 0;
+        } else {
             for(i = 0; i < fs_stat.num_dir_entries; i++) {
-                if (dentries[i].file_type == FILE_TYPE_DIR) {
-                    /* Compare given fname with current dentry's file_name */
-                    if (strncmp((int8_t*) fname, (int8_t*) dentries[i].file_name, fname_length) == 0) {
-                        /* At this point, i is already incremented */
-                        if (!(fname_length < MAX_FILE_NAME_LENGTH && dentries[i].file_name[fname_length] != 0)) {
-                            return dir_index;
-                        } 
+                /* Compare given fname with current dentry's file_name */
+                if (strncmp((int8_t*) fname, (int8_t*) dentries[i].file_name, fname_length) == 0) {
+                    /* At this point, j is already incremented */
+                    if (fname_length < MAX_FILE_NAME_LENGTH && dentries[i].file_name[fname_length] != 0) {
+                        /* It means dentry's file_name is longer than given file_name */
+                        continue;
+                    } else {
+                        /* If we reach here, matching file name found */
+                        return i;
                     }
-                    /* if the file type is directory, increment dir_index */
-                    dir_index++;
+                } else {
+                    continue;
+                    /* Otherwise continue searching for next dentry */
                 }
-            }
-            /* If matching inode is not found, retrun null */
-            return -1;
+            }    
+            /* Not found */
+            return -1;            
         }
     }
 }
 
 /* read_dir()
-   Given the index of directory, read the (offset)'th directory's name, at most
+   Given the offset, read the (offset)'th directory entry's file name, at most
    length bytes, into buffer array
    Input : inode_ptr -- pointer to the inode of the file to be read
            offset -- the starting position inside the file to begin reading
@@ -294,44 +306,41 @@ int32_t open_dir(const uint8_t* fname) {
 */
 int32_t read_dir(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t length) {
     int i;
-    int32_t dir_number = -1;
-    int32_t dir_entry = -1;
     uint32_t file_name_length = 0;
 
-    /* Iterate through directories and find a directory that points to the same number as dir_index,
-       from open_dir()
-       at the same time, increment dir_number to update the current directory position */
-    for (i = 0; i < fs_stat.num_dir_entries; i++) {
-        if (dentries[i].file_type == FILE_TYPE_DIR) {
-            dir_number++;
-        }
-        if (dir_number == offset) {
-            dir_entry = i;
-            break;
-        }
-    }
-
-    if (dir_entry > -1) {
-        /* obtain the length of the name of directory */
+    if (fs_stat.num_dir_entries <= offset) {
+        return 0;
+    } else {
+        /* obtain the length of the name of file */
         for (i = 0; i < MAX_FILE_NAME_LENGTH; i++) {
-            if (dentries[dir_entry].file_name[i] != NULL) {
+            if (dentries[offset].file_name[i] != NULL) {
                 file_name_length++;
             }
             else {
-                /* TODO TBD whether to include NULL as a read byte at the end or not */
-                //file_name_length++;
                 break;
             } 
         }
         /* if the file name length is greater than the given length, cut it out */
-        if(file_name_length >= length) file_name_length = length;
+        // if(file_name_length >= length) file_name_length = length;
+        file_name_length = min(file_name_length, length);
        
         /* copy the file name into the buffer array */
-        strncpy((int8_t*)buf, (int8_t*)dentries[dir_entry].file_name, file_name_length);          
+        strncpy((int8_t*)buf, (int8_t*)dentries[offset].file_name, file_name_length);
+        
         return file_name_length;
-    } else {
-        return 0;
     }
+}
+
+int32_t read_dir_wrapper(int32_t fd, uint8_t* buf, uint32_t length){
+  pcb_t* pcb = get_pcb_ptr();
+  inode_t* inode_ptr = (((pcb -> file_array)[fd]).inode_ptr);
+  uint32_t offset = (((pcb -> file_array)[fd]).file_position);
+
+  int32_t bytes_read = read_dir(inode_ptr, offset, buf, length);
+  if (bytes_read > 0) {
+      ((pcb -> file_array)[fd]).file_position += 1;
+  }
+  return bytes_read;
 }
 
 /* write_dir()
@@ -347,6 +356,7 @@ int32_t read_dir(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t len
 int32_t write_dir(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t length) {
     return -1;
 }
+
 /* close_dir()
    Close the directory.
    It fails no matter what because the file system is read only
@@ -358,11 +368,6 @@ int32_t close_dir(inode_t* inode_ptr) {
     return 0;
 }
 
-
-int32_t min(int32_t a, int32_t b) {
-    return (a < b)? a : b; 
-}
-
 /* test_file_system_driver()
    Prints out the first few bytes of the regular files in the file system, along with their sizes
    This is not a real funcfion that does any real functionality
@@ -371,8 +376,8 @@ int32_t min(int32_t a, int32_t b) {
 void test_file_system_driver(void) {
     const uint32_t buf_size = BLOCK_SIZE * 10;
     uint8_t buf[buf_size];
-    const uint32_t file_name_length = 32;
-    uint8_t buf2[32];
+    const uint32_t file_name_length = MAX_FILE_NAME_LENGTH;
+    uint8_t buf2[MAX_FILE_NAME_LENGTH];
     int32_t temp;
     int i;
 

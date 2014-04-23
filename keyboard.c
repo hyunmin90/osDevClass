@@ -176,45 +176,25 @@ void caps_on_handler(unsigned char keycode)
 	}
 }
 
-/* Implementation To Prevent Multiprinting of Held Key */
-/*
-int key_released = 1; 	// Tells if Key has been Released
-int prev_key = 3000; 	// Previously Pressed Key
-*/
-	/* New Key, Can Be Printed */
-		/*
-		if(key <= 128 && key_released == 1){
-				prev_key = key;
-				printf("%s\n", keys[key-1]);
-				key_released = 0;
-		}*/
-
-		/* Recognize Key Release */
-				/*
-		else if (key_released == 0 && key == (prev_key + 0x80)){
-				key_released = 1;
-		}*/
-
-
-/* terminal_open function
+/* Terminal Open function
    Input : None
    Output : return 0 on success
    Side Effect : Keyboard Interrupts are enabled
 */
-int terminal_open(void)
+int32_t terminal_open()
 {
 	enable_irq(KEYBOARD_IRQ);
 	return 0;
 }
 
-/* terminal_close function
+/* Terminal Close function
    Input : None
    Output : return 0 on success
    Side Effect : Disables Keyboard Interrupts
    				 Moves Cursor to Top Left
    				 Clears Screen 
 */
-int terminal_close(void)
+int32_t terminal_close()
 {
 	disable_irq(KEYBOARD_IRQ);
 	update_cursor(0,0);
@@ -222,19 +202,30 @@ int terminal_close(void)
 	return 0;
 }
 
-/* terminal_read function
-   Input : buf - char buf to copy data to
-   		   nbytes - number of bytes to copy into buf
+/* Terminal Read function
+   Input : dummy -- Dummy Variable to Align Args
+   		   buf -- char buf to copy data to
+   		   nbytes -- number of bytes to copy into buf
    Output : # of bytes copied into char buf
-   Side Effect : T
+   Side Effect : Fills in buffer with nbytes or line terminated with enter
 */
-int terminal_read(char *buf,int nbytes)
+int32_t terminal_read(uint32_t dummy, uint8_t* buf,uint32_t nbytes)
 {
-	index = 0;
-	read_on = 1;
-	if(nbytes <= BUFFER_SIZE){
-		while(read_return == 0 && index < nbytes){}
-		//while(read_return == 0){}
+	index = 0;		// Initalize index
+	read_on = 1;	// Currently reading
+	int i = 0;
+	for(i=0;i<nbytes;i++)
+	{
+		buf[i]='\0';
+	}
+	
+	/* Wait Until reached the num bytes requested
+	 * Or line terminated with enter
+	 * Or Keyboard Buffer Size */
+	if(nbytes <= MAX_ARG_BUF){
+		while(read_return == 0 && index < nbytes && index < BUFFER_SIZE){}
+
+		/* Store read bytes into buf */
 		int i;
 		for(i = 0; i < nbytes; i++){
 			if(i < index)
@@ -242,35 +233,50 @@ int terminal_read(char *buf,int nbytes)
 			else
 				buf[i] = NULL;
 		}
+		/* Reset Variables(Not Reading) */
 		read_on = 0;
 		read_return = 0;
 		if(index == nbytes)
 			printf("\n");
 		return index;
 	}
+	/* Reset Variables*/
 	read_on = 0;
 	read_return = 0;
 	return -1;
 }
 
-/* terminal_write function
-   Input : buf - char buf with data to write to terminal
-   		   nbytes - number of bytes to write to terminal
+/* Terminal Write function
+   Input : dummy -- Dummy Variable to Align Args
+   		   dummy1 -- Dummy Variable to Align Args
+   		   buf - char buf with data to write to terminal
+   		   nbytes -- number of bytes to write to terminal
    Output : Return number of bytes written to terminal including '\n' if any
    Side Effect : Writes to Terminal 
 */
-int terminal_write(const char *buf, int nbytes)
+int32_t terminal_write(uint32_t dummy, uint32_t dummy1, const uint8_t* buf, uint32_t nbytes)
 {	
 	int i;
-	int n = -1;
-
-	for(i = 0; i < nbytes; i++){
-		if(buf[i] != NULL)
+	int n = 0;
+	if(buf == NULL)
+		return -1;
+	if(nbytes < 0)
+		return -1;
+	/* Print string in buf until 
+	 * Reached End of String */
+	for (i = 0; i < nbytes; i++) {
+		if (buf[i] != NULL) {
 			putc(buf[i]);
-		else if (n == -1)
-			n = i;
+			n++;
+		} else {
+			break;
+		}
 	}
-	return n;
+	if(nbytes == 0)
+		return -1;
+	/* Return # of bytes written */
+	return i+1;
+	//return (n == 0)? -1 : n;
 }
 
 /* update_terminal_buf function
@@ -312,17 +318,16 @@ void test_terminal(void)
 {
 	int buf_size;
 	buf_size = 20;
+	int f;
 	int g;
 	int p = terminal_open();
 	if(p == 0){
-		char buf[buf_size];
+		unsigned char buf[buf_size];
 		while(1)
 		{
-			int f = terminal_read(buf, buf_size);
-			//printf("read return: %d\n", f);
+			f = terminal_read(0,buf, buf_size);
 			if(f != -1){
-				g = terminal_write(buf, buf_size);
-			//printf("write return: %d\n", g);
+				g = terminal_write(0,0,buf, buf_size);
 			}
 			int q;
 			for (q = 0; q < buf_size; q++) {

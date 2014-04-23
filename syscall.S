@@ -4,6 +4,8 @@
 
 #define ASM     1
 #include "x86_desc.h"
+#define MAX_NUM_SYS_CALL 10
+#define DUMMY -1
 
 .globl RESTORE_INT_REGS
 
@@ -50,12 +52,12 @@
 #
 ######################
 system_call:
-	pushl $-1;		# PUSH: Dummy
-	pushl %eax		# PUSH: save orig_eax
+	pushl $(DUMMY);		# PUSH: Dummy
+	pushl %eax			# PUSH: save orig_eax
 	SAVE_ALL		
 
-	cmpl $20, %eax 	# check for bad system call
-	jae syscall_badsys
+	cmpl $(MAX_NUM_SYS_CALL), %eax 	# check for bad system call
+	ja syscall_badsys
 	cmpl $0, %eax 
 	jbe syscall_badsys
 
@@ -70,10 +72,6 @@ resume_userspace:
 	RESTORE_REGS
 	addl $8, %esp	# POP: Clean up Stack
 	iret
-
-halt_ret:
-
-
 syscall_badsys:
 	movl $-1, 24(%esp)	# Return
 	jmp resume_userspace

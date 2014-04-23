@@ -5,18 +5,18 @@
 #include "paging.h"
 #include "lib.h"
 #include "pcb.h"
-
-#ifndef LOG
-#define LOG(str, ...)                                                   \
-    do { if (DEBUG_MODE) printf(str,  ## __VA_ARGS__); } while (0)
-#endif
+#include "debug.h"
 
 /* Page Directory */
 pde_t pg_dir[NUM_PDE] __attribute__((aligned(PAGE_TABLE_SIZE)));
 /* Page Table */
 pte_t pg_table[NUM_PTE] __attribute__((aligned(PAGE_TABLE_SIZE)));
 
-pde_t pg_dirs[MAX_NUM_PROCESS][NUM_PDE] __attribute((aligned(PAGE_TABLE_SIZE)));
+pde_t pg_dirs[MAX_NUM_PROCESS][NUM_PDE] __attribute__((aligned(PAGE_TABLE_SIZE)));
+
+pte_t pg_tables[MAX_NUM_PROCESS][NUM_PTE] __attribute__((aligned(PAGE_TABLE_SIZE)));
+/* Page Table for video mapping */
+pte_t pg_tables_vid[MAX_NUM_PROCESS][NUM_PTE] __attribute__((aligned(PAGE_TABLE_SIZE)));
 
 /* init_paging()
    Initialize Paging. 
@@ -116,31 +116,124 @@ void enable_global_pages(uint32_t start_addr, uint32_t end_addr) {
                 PAGING_READ_WRITE | PAGING_PRESENT;
         }
     } else {
-        printf("enable_global_pages():Illegal state reached\n");
+        printf("enable_global_pages():Illegal state reached");
     }
 }
 
+/*get_proc_index_for_pg_dir()
+  Given pointer to page directory, returns process's index that is bound to given PD
+  Input : pg_dir - page directory to search
+  Output : index of process in global_pcb_ptrs array that is bound to given page directory
+           -1 if no matching process index is found
+ */
+int32_t get_proc_index_for_pg_dir(pde_t* pg_dir) {
+  int i;
+  for(i = 0; i < MAX_NUM_PROCESS; i++){
+    if(pg_dir == pg_dirs[i])
+    break;
+  }
+  if(i == MAX_NUM_PROCESS)
+    return -1;
+  else
+    return i;
+}
+
+/*map_page()
+  Map given virtual address to physical address with flag variable, at given pg_dir
+  Input : virt_addr - Virtual address of the page to map from
+          phys_addr - Physical address of the page to be mapped to
+          flag - Flag values to be used; 
+                 supports PAGING_READ_WRITE, PAGING_GLOBAL_PAGE, PAGING_USER_SUPERVISOR
+          pg_dir - Pointer to page directory to operate on
+  Output : 0 on success, -1 on failure
+  Side Effects : Update Page Directory Entry and/or Page Directory Entry to newly map 
+                 virtual address to physical address
+*/
 int32_t map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flag, pde_t* pg_dir) {
     if (virt_addr < PAGE_BEGINNING_ADDR_4M) {
-        // Let's not allow mapping under 4MB for now
-        LOG("map_page function doesn't allow mapping under 4MB virtual address\n");
+      uint32_t read_write = flag & PAGING_READ_WRITE;
+      uint32_t global_page = flag & PAGING_GLOBAL_PAGE;
+      uint32_t user_supervisor = flag & PAGING_USER_SUPERVISOR;
+      /* Find Process # */
+      int i = get_proc_index_for_pg_dir(pg_dir);
+      if(i == -1)
         return -1;
-    }
-    pde_t* pde = &pg_dir[(PAGE_BASE_ADDRESS_4M(virt_addr) >> 22)];
-    if (pde->val & PAGING_PRESENT) {
-        /* Since we are not implementing swap now, treat PRESENT bit as existence of pde/pte or not*/
-        LOG("You cannot map a page that is already mapped(Present bit is 1 already)\n");
+
+      /* Fill in PDE */
+      pde_t* pde = &pg_dir[PAGE_DIR_OFFSET(virt_addr)]; 
+      if (!(pde->val & PAGING_PRESENT)) {
+        pde->val = PAGE_BASE_ADDRESS_4K((uint32_t) pg_tables[i]) | PAGING_PRESENT | read_write |
+                                        global_page | user_supervisor;
+      }
+
+      /* Fill in PTE */
+      pte_t* pte = &pg_tables[i][PAGE_TABLE_OFFSET(virt_addr)];
+      if(pte->val & PAGING_PRESENT)
         return -1;
-    }
-    uint32_t read_write = flag & PAGING_READ_WRITE;
-    uint32_t global_page = flag & PAGING_GLOBAL_PAGE;
-    uint32_t user_supervisor = flag & PAGING_USER_SUPERVISOR;
-    
-    pde->val = PAGE_BASE_ADDRESS_4M(phys_addr) | PAGING_PAGE_SIZE | PAGING_PRESENT |
+      pte->val = PAGE_BASE_ADDRESS_4K(phys_addr) | PAGING_PRESENT | read_write |
         read_write | global_page | user_supervisor;
-    return 0;
+      return 0;
+    } else {
+      pde_t* pde = &pg_dir[PAGE_DIR_OFFSET(virt_addr)];
+      if (pde->val & PAGING_PRESENT) {
+          /* Since we are not implementing swap now, treat PRESENT bit as existence of pde/pte or not*/
+          LOG("You cannot map a page that is already mapped(Present bit is 1 already)\n");
+          return -1;
+      }
+      uint32_t read_write = flag & PAGING_READ_WRITE;
+      uint32_t global_page = flag & PAGING_GLOBAL_PAGE;
+      uint32_t user_supervisor = flag & PAGING_USER_SUPERVISOR;
+      
+      pde->val = PAGE_BASE_ADDRESS_4M(phys_addr) | PAGING_PAGE_SIZE | PAGING_PRESENT |
+          read_write | global_page | user_supervisor;
+      return 0;
+    }
+}
+/*map_page_vid()
+  video map paging function - only deals with 4kb paging
+  Input : virt_addr - Virtual address of the page to map from
+          phys_addr - Physical address of the page to be mapped to
+          flag - Flag values to be used; 
+                 supports PAGING_READ_WRITE, PAGING_GLOBAL_PAGE, PAGING_USER_SUPERVISOR
+          pg_dir - Pointer to page directory to operate on
+  Output : 0 on success, -1 on failure
+  Side Effects : Update Page Directory Entry and/or Page Directory Entry to newly map 
+                 virtual address to physical address
+*/
+int32_t map_page_vid(uint32_t virt_addr, uint32_t phys_addr, uint32_t flag, pde_t* pg_dir) {
+    
+      uint32_t read_write = flag & PAGING_READ_WRITE;
+      uint32_t global_page = flag & PAGING_GLOBAL_PAGE;
+      uint32_t user_supervisor = flag & PAGING_USER_SUPERVISOR;
+      /* Find Process # */
+      int i = get_proc_index_for_pg_dir(pg_dir);
+      if(i == -1)
+        return -1;
+
+      /* Fill in PDE */
+      pde_t* pde = &pg_dir[PAGE_DIR_OFFSET(virt_addr)]; 
+      if (!(pde->val & PAGING_PRESENT)) {
+        pde->val = PAGE_BASE_ADDRESS_4K((uint32_t) pg_tables_vid[i]) | PAGING_PRESENT | read_write |
+                                        global_page | user_supervisor;
+      }
+
+      /* Fill in PTE for video */
+      pte_t* pte = &pg_tables_vid[i][PAGE_TABLE_OFFSET(virt_addr)];
+      if(pte->val & PAGING_PRESENT)
+        return -1;
+      pte->val = PAGE_BASE_ADDRESS_4K(phys_addr) | PAGING_PRESENT | read_write |
+        read_write | global_page | user_supervisor;
+      return 0;
 }
 
+
+/*get_pg_dir()
+  Given process's index in global_pcb_ptrs, find the page directory that belongs to 
+  given index's PCB
+  Input : proc_index - index of PCB in global_pcb_ptrs
+  Output : Pointer to page directory
+           NULL if not found
+ */
 pde_t* get_pg_dir(int32_t proc_index) {
     if (proc_index < 0 || proc_index >= MAX_NUM_PROCESS) {
         LOG("process index out of bound");
@@ -149,7 +242,35 @@ pde_t* get_pg_dir(int32_t proc_index) {
     return pg_dirs[proc_index];
 }
 
+/*set_cr3_reg()
+  Update CR3 register to point to new Page Directory.
+  Side Effects : Flush Translate Lookaside Buffer
+ */
 void set_cr3_reg(pde_t* pg_dir) {
     /* Set CR3 to be physical address of Page Directory */
     asm volatile("mov %0, %%cr3;"::"b" (pg_dir));
+}
+
+/*cleanup_pg_dir()
+  When page directory is not being used anymore, clean up all page directory entries
+  and page table entries corresponding to given pointer by setting them to 0s.
+  Input : pg_dir - Pointer to page directory to be cleaned up
+  Output : 0 on success, -1 on failure
+  Side Effects : Update a Page directory and Page table
+ */
+int32_t cleanup_pg_dir(pde_t* pg_dir) {
+  int i;
+  int index;
+  for (i = 0; i < NUM_PDE; i++) {
+    pg_dir[i].val = NULL;
+  }
+
+  index = get_proc_index_for_pg_dir(pg_dir);
+  if(index == -1)
+    return -1;
+  pte_t* cur_pg_table = pg_tables[index];
+  for (i = 0; i < NUM_PTE; i++) {
+    cur_pg_table[i].val = NULL;
+  }
+  return 0;
 }

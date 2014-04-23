@@ -1,6 +1,7 @@
 #ifndef _KEYBOARD_H
 #define _KEYBOARD_H
 
+#include "types.h"
 /* Keyboard Ports */
 #define KBD_DATA_PORT 			0x60
 #define KBD_CNTL_PORT			0x64
@@ -25,6 +26,7 @@
 #define M						0x32
 
 #define BUFFER_SIZE 			128
+#define MAX_ARG_BUF				1024
 
 /*IRQ value representing keyboard */
 #define KEYBOARD_IRQ 	1
@@ -37,13 +39,13 @@ int letter_check(unsigned char keycode);
 void caps_on_handler(unsigned char keycode);
 
 /* Opens Terminal */
-int terminal_open(void);
+int32_t terminal_open();
 /* Close Terminal */
-int terminal_close(void);
+int32_t terminal_close();
 /* Read from Terminal */
-int terminal_read(char *buf,int nbytes);
+int32_t terminal_read(uint32_t dummy, uint8_t* buf,uint32_t nbytes);
 /* Write to Terminal */
-int terminal_write(const char *buf, int nbytes);
+int32_t terminal_write(uint32_t dummy, uint32_t dummy1, const uint8_t* buf, uint32_t nbytes);
 /* Helper function to update terminal buf */
 void update_terminal_buf(int n, char keycode);
 /* Tests terminal open/close/read */

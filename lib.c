@@ -711,3 +711,38 @@ void update_cursor(int row, int col)
    outb(CURSOR_LOC_HIGH_INDEX, crtc_address);
    outb((unsigned char )((position >> 8) & 0xFF), crtc_data);
 }
+
+/* index_of_char
+  Finds the index in the string where c occurs
+  Input : str -- int to be compared
+          c -- character to be checked
+  Output : Index in the string where c occurs
+  		   -1 on failure
+  Side Effects : None
+*/
+int32_t index_of_char(const int8_t* str, int8_t c) {
+    if (str == NULL) {
+        return -1;
+    }
+    int i = 0;
+    while (1) {
+        if (str[i] == NULL) {
+            return -1;
+        } else if (str[i] == c) {
+            return i;
+        } else {
+            i++;
+        }
+    }
+}
+
+/* min()
+  Helper Function for test_file_system_driver()
+  Input : a -- int to be compared
+          b -- int to be compared
+  Output : returns the minimum input
+  Side Effects : None
+*/
+int32_t min(int32_t a, int32_t b) {
+    return (a < b)? a : b; 
+}

@@ -2,8 +2,6 @@
 #define _INTERRUPT_HANDLER_H
 
 #include "x86_desc.h"
-#define USER_CS 0x0023
-#define USER_DS 0x002B
 
 #define NR_EXCEPTIONS 			21
 #define NR_IRQS 				16
@@ -26,7 +24,8 @@
 #define IRQ_NAME2(nr) 	nr##_interrupt(void)
 #define IRQ_NAME(nr) 	IRQ_NAME2(IRQ##nr)
 
-/* Create a assembly linkage for an interrupt handler */
+/* Linkage For 
+ Interrupts That Push Error Codes */
 #define BUILD_IRQ_ERRCODE(nr) \
 void IRQ_NAME(nr); \
 __asm__( \
@@ -37,6 +36,8 @@ __asm__( \
 "addl $8, %esp;" \
 "iret;");
 
+/* Linkage For
+ Interrupts That Do Not Push Error Codes */
 #define BUILD_IRQ(nr) \
 void IRQ_NAME(nr); \
 __asm__( \
@@ -48,6 +49,7 @@ __asm__( \
 "addl $8, %esp;" \
 "iret;");
 
+/* System Call Linkage */
 #define BUILD_SYSCALL(nr) \
 void IRQ_NAME(nr); \
 __asm__( \
@@ -55,6 +57,7 @@ __asm__( \
 "IRQ" #nr "_interrupt:\n\t" \
 "jmp system_call;");
 
+/* Save Regs for Interrupts */ 
 #define SAVE_ALL \
 asm ( \
 "\n.align 4\n" \
@@ -71,6 +74,7 @@ asm ( \
 "movl %edx, %ds;" \
 "movl %edx, %es;");
 
+/* Restore Regs for Interrupts */
 #define RESTORE_ALL \
 asm ( \
 "\n.align 4\n" \
@@ -84,8 +88,7 @@ asm ( \
 "popl %ds;" \
 "popl %es;");
 
+/* Inits IDT Table */
 void init_idt(void);
-void build_irq(const int irq_num);
-
 
 #endif

@@ -65,15 +65,13 @@ void rtc_init()
 /*
  *   rtc_open
  *   DESCRIPTION: rtc open set the frequency to 2hz, when default opened
- *   INPUTS: none
+ *   INPUTS: dummy -- Dummy Variable to Align Args
  *   OUTPUTS: none
  *   RETURN VALUE: none
  *   SIDE EFFECTS: none 
  *			 	
  */   
-
-
-void rtc_open()
+int32_t rtc_open(int32_t dummy)
 {
 	uint8_t temp;
 	// calls register A, which is responsible for handling frequency
@@ -83,6 +81,7 @@ void rtc_open()
 	// select the frequency rate : range from 2Hz to 8.192kHz
 	outb(FREQF | temp, RTC_DATA_PORT); 
 	//setting the frequency to 2 hz
+	return 0;
 
 }
 
@@ -97,7 +96,7 @@ void rtc_open()
  *			 	
  */   
 
-int rtc_read()
+int32_t rtc_read()
 {
 	while(RTCreadCheck!=1) //wait until RTC handler set the RTCreadCheck to 1
 	{
@@ -113,36 +112,47 @@ int rtc_read()
 /*
  *   rtc_write
  *   DESCRIPTION: RTC takes in the frequency to set and sets it to the given frequency
- *   INPUTS: Frequency to set to. 1~15 is the range of possible set.
+ *   INPUTS: dummy -- Dummy Variable to Align Args
+ *			 dummy1 -- Dummy Variable to Align Args
+ *           freq_ptr -- Pointer to Frequency to Set (1~15) 
+ * 			 dummy2 -- Dummy Variable to Align Args
  *   OUTPUTS: writes the frequency to RTC
  *   RETURN VALUE: return 0 on success else -1 on failure
  *   SIDE EFFECTS: none 
  *			 	
  */ 
-int rtc_write(int32_t frequencyToSet)
+int32_t rtc_write(uint32_t dummy, uint32_t dummy1, int32_t* freq_ptr, uint32_t dummy2)
 {
+	int32_t freq = *freq_ptr;
+
 	char Fs=0; //Frequency to set
 	uint8_t temp;
-	char FrequencySet[11];
+	int FrequencySet[NUM_FREQ];
 	int i;
 	int powerofTwo=0;
-	int SetFrequency=20; //variable for checking if we have found a corresponding freq.If never found, it is 20.
-	
-	if(frequencyToSet>MAXFREQ) //Out of Range for frequency.
+	int SetFrequency= WRONGFREQ; //variable for checking if we have found a corresponding freq.If never found, it is 20.
+	int tempNumber=0;
+	if(freq>MAXFREQ) //Out of Range for frequency.
 	{
 		return -1;
 	}
+
 	
-	for(i=0;i<11;i++)	//Setting Register bits to Array for compare
+	for(i = 0;i < NUM_FREQ;i++)	//Setting Register bits to Array for compare
 	{
-	powerofTwo=i*2;
-        
+	if(i==1)
+	{
+		powerofTwo=1;
+	}
+	powerofTwo=powerofTwo*2;    
 	FrequencySet[i]=powerofTwo;
 	}
 	
-	for(i=0;i<11;i++)	//Finding the right Register bit for input Frequency
+	for(i=0;i< NUM_FREQ;i++)	//Finding the right Register bit for input Frequency
 	{
-		if(FrequencySet[i]==frequencyToSet)
+	
+		tempNumber=FrequencySet[i];
+		if(tempNumber==freq)
 		{
 			SetFrequency=i;//15-Index gives the register bit for the Frequency
 		}
@@ -154,7 +164,7 @@ int rtc_write(int32_t frequencyToSet)
 		return -1;
 	}
 	
-	SetFrequency=15-SetFrequency+1; //Calculating the Register bit, out of 15
+	SetFrequency= 16 - SetFrequency; //Calculating the Register bit, out of 15
 	
 	
 		Fs=(SetFrequency&CBIT1); // calculate the frequency with last 4 bit, with clearing unrelated bits.
@@ -166,7 +176,6 @@ int rtc_write(int32_t frequencyToSet)
 		outb(Fs | (temp & CBIT2), RTC_DATA_PORT);
 		//setting the frequency
 		return 0;
-	
 }
 
 
@@ -179,7 +188,7 @@ int rtc_write(int32_t frequencyToSet)
  *   SIDE EFFECTS: none 
  *			 	
  */ 
-int rtc_close()
+int32_t rtc_close()
 {
 	return 0; //return 0 with success
 
@@ -200,12 +209,14 @@ void rtc_test()
 {
 
 	reset_screen(); //clear the screen for testing
-	rtc_open(); //Call rtc open. set rtc to 2hz
-	rtc_write(16); //write rtc freq
+	rtc_open(0); //Call rtc open. set rtc to 2hz
+	int32_t* ptr;
+	*ptr = 64;
+	rtc_write(0,0,ptr,0); //write rtc freq
 	while(1)	//wait until rtc_read respond for having rtc interrupt
 	{
 	
-	rtc_read();
+	rtc_read(0);
 	printf("hihi"); //RTC read successful. Print hi for showing freq rate
 	
 	}

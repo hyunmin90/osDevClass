@@ -28,7 +28,7 @@ BUILD_IRQ(0x12)
 BUILD_IRQ(0x13)
 BUILD_IRQ(0x14)
 
-/* Build assembly linkages for interrupts */
+/* Build assembly linkages for other interrupts */
 BUILD_IRQ(0x20)
 BUILD_IRQ(0x21)
 BUILD_IRQ(0x22)
@@ -77,15 +77,21 @@ static void (*interrupt[NR_IRQS])(void) = {
    Output : None
    Side Effect : Handle interrupt(or exception and system call)
    Issue EOI(End Of Interrupt) to unmask handled interrupt   
+   Saves and Restores Regs
 */
 void common_handler(int i) {
-    SAVE_ALL
+    //SAVE_ALL
+    /* Exceptions */
     if(i >= VEC_LOWEST_EXCEPTION && i <= VEC_HIGHEST_EXCEPTION) {
+        /* Call Halt to Squash Exceptions */
         printf("Exception %x Reached\n", i);
-        //while(1) {
-            /* Spins because we don't have proper ways to return from interrupt yet */
-        //}
-    } else if (i >= VEC_LOWEST_IRQ && i <= VEC_HIGHEST_IRQ) {
+        /*int p;
+        asm volatile("movl %%cr2, %0;" ::"b"(p));
+        printf("%x", p);*/
+        asm volatile("movl $1, %%eax; movl %0, %%ebx;int $0x80;"::"b"(256));
+    } 
+    /* Regular Interrupts */
+    else if (i >= VEC_LOWEST_IRQ && i <= VEC_HIGHEST_IRQ) {
         if (i == VEC_KEYBOARD_INT) {
             /* In case of keyboard interrupt, hand control over to keyboard_handler */
             keyboard_handler(i);
@@ -96,18 +102,12 @@ void common_handler(int i) {
         } else {
             printf("Interrupts %x Reached\n", i);
         }
-    } else if (i == VEC_SYSTEM_CALL) { 
-        asm("jmp system_call");
     } else {
         printf("Undefined Interrupt / Exception Reached\n");
     }
-    RESTORE_ALL
+    //RESTORE_ALL
 }
 
-void sys_restart_call()
-{
-    printf("Reached\n");
-}
 /* init_idt()
    Initialize IDT and its entries
    1. Initialize x86 defined exception vectors from 0x00 to 0x1F
@@ -143,6 +143,7 @@ void init_idt(void) {
         } else if (i == VEC_SYSTEM_CALL) {
             /* For system call, set dpl to 3 to enable normal users with
                user privilege to call it */
+            the_idt_desc.reserved3 = 1;         // Set idt using Trap Gate(111)
             the_idt_desc.dpl = USER_LEVEL;
             SET_IDT_ENTRY(the_idt_desc, IRQ0x80_interrupt);
         } else {

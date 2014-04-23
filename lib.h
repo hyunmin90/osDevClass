@@ -5,13 +5,6 @@
 #ifndef _LIB_H
 #define _LIB_H
 
-#define DEBUG_MODE 1
-
-#ifndef LOG
-#define LOG(str, ...)                                                   \
-    do { if (DEBUG_MODE) printf(str,  ## __VA_ARGS__); } while (0)
-#endif
-
 #include "types.h"
 #include "keyboard.h"
 #define VIDEO 0xB8000
@@ -46,6 +39,9 @@ void backspace(void);
 /* Updates Cursor */
 void update_cursor(int row, int col);
 
+int32_t index_of_char(const int8_t* str, int8_t c);
+
+int32_t min(int32_t a, int32_t b);
 
 /* Port read functions */
 /* Inb reads a byte and returns its value as a zero-extended 32-bit

@@ -165,9 +165,9 @@ entry (unsigned long magic, unsigned long addr)
 	/* Initialize devices, memory, filesystem, enable device interrupts on the
 	 * PIC, any other initialization stuff... */
 	 
-        /* Initialize the Read-only File System */
-        module_t* fs_mod = (module_t*)mbi->mods_addr;
-        init_file_system(fs_mod->mod_start, fs_mod->mod_end);
+    /* Initialize the Read-only File System */
+    module_t* fs_mod = (module_t*)mbi->mods_addr;
+    init_file_system(fs_mod->mod_start, fs_mod->mod_end);
 
 	/* Initialize Paging */
 	init_paging();
@@ -177,7 +177,6 @@ entry (unsigned long magic, unsigned long addr)
 	 * IDT correctly otherwise QEMU will triple fault and simple close
 	 * without showing you any output */
 	printf("Enabling Interrupts\n");
-	//printf("%s\n", keys[0]);
 	sti();
 
 	/* Test file_system driver */
@@ -185,16 +184,17 @@ entry (unsigned long magic, unsigned long addr)
 
     /* Test the RTC driver */
 	//rtc_test();
-
-	int8_t exec_cmd[15] = "testprint";
-	asm volatile("movl $2, %%eax; movl %0, %%ebx;int $0x80;"::"b"(exec_cmd));
-	printf("ended exec!\n");
+	while(1){
+		int8_t exec_cmd[15] = "shell";
+		asm volatile("movl $2, %%eax; movl %0, %%ebx;int $0x80;"::"b"(exec_cmd));
+		printf("ended exec!\n");
+	 }
+	// asm volatile("movl $1, %%eax; movl %0, %%ebx;int $0x80;"::"b"(exec_cmd));
 
 	/* Test terminal & keyboard driver */
-	test_terminal();
+	//test_terminal();
 
-	//halt(3);
-	//rtc_write(0xF);
+	
 	/* Execute the first program (`shell') ... */
     //execlp("shell", NULL);        
 

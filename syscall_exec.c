@@ -3,51 +3,69 @@
 #include "file_system.h"
 #include "system_call.h"
 #include "pcb.h"
+#include "paging.h"
+#include "debug.h"
 
 #define MAX_CMD_NAME_LENGTH 32
 #define MAX_CMD_ARG_LENGTH 32
 #define TASK_PAGE_VIRT_ADDR 0x8000000  /* 128MB */
 #define TASK_BEGIN_VIRT_ADDR 0x8048000
 #define TASK_ENTRY_PTR_VIRT_ADDR 0x8000000
-#define LOADER_BUFFER_SIZE 1024
+#define LOADER_BUFFER_SIZE 16
+#define TASK_MEM_PADDING 16
 
 static int32_t parse_command(const int8_t* command, int8_t* exec_name, int8_t* exec_args);
 static int32_t check_executable(const int8_t* exec_name, uint32_t* entry_addr);
 static int32_t load_executable(const int8_t* exec_name);
 
-// TODO move to lib.c
-int32_t index_of_char(const int8_t* str, int8_t c) {
-    if (str == NULL) {
-        return -1;
-    }
-    int i = 0;
-    while (1) {
-        if (str[i] == NULL) {
-            return -1;
-        } else if (str[i] == c) {
-            return i;
-        } else {
-            i++;
-        }
-    }
-}
+/*do_execute()
+  Execute a new process and set the current process to be parent process of the newly spawned process
+  1. Set up a new PCB block
+  2. Parse command, extract argument
+  3. Check if file exists, and if it is an executable file
+  4. Set up a new page directory, and switch CR3 to point to new PD
+  5. Load the executable file into 128MB virtual memory
+  6. Sets up the stack in order to context switch into user's program
+  7. Enter into the user's program with IRET
+  8. Upon JMP from HALT system call, return HALT's status
 
+  Input : syscall_struct - the view of the pushed stack of registers
+  Output : 0 on success(upon executed process halts)
+           256 if process is halted by exception
+           0~255 if user program calls halt system call
+  Side Effects : Update TSS's ESP0 and SS0 in order to enable the new process
+                 can go back and forth in its own kernel stack and user stack.
+                 IRET into the user's program
+                 User program's HALT system call JMP's into this function
+ */
 int32_t do_execute(syscall_struct_t syscall_struct) {
     LOG("do_execute called\n");
     int8_t* command = (int8_t *) syscall_struct.ebx;
+    int32_t ret_val = 0;
 
-    /* TODO need to find a blank space to setup new PCB, kernel stack 
-       and setup ESP0, SS0, and current ESP
-     */
     pcb_t* new_pcb_ptr = get_new_pcb_ptr();
+    if (new_pcb_ptr == NULL) {
+        LOG("No more Process for you!\n");
+        return -1;
+    }
+
+    pcb_t* cur_pcb_ptr = get_pcb_ptr();
 
     /* Initialize PCB */
-    /* TODO Need to do open_terminal somewhere */
     init_pcb(new_pcb_ptr);
+
+    /* Update Parent Process */
+    LOG("new process with parent process %d\n", get_proc_index(get_pcb_ptr()));
+    new_pcb_ptr->parent_pcb = cur_pcb_ptr;
+
+    asm volatile("movl %%esp, %0": "=b"(cur_pcb_ptr->esp0));
+    asm volatile("movl %%ss, %0": "=b"(cur_pcb_ptr->ss0));
+    asm volatile("movl %%ebp, %0": "=b"(cur_pcb_ptr->ebp));
     
     /* Parse command */
     if (parse_command(command, new_pcb_ptr->cmd_name, new_pcb_ptr->cmd_args) != 0) {
         LOG("parse failed.\n");
+        destroy_pcb_ptr(new_pcb_ptr);
         return -1;
     }
     const int8_t* exec_name = new_pcb_ptr->cmd_name;
@@ -56,50 +74,78 @@ int32_t do_execute(syscall_struct_t syscall_struct) {
     uint32_t entry_addr;
     if (check_executable(exec_name, &entry_addr) != 0) {
         LOG("File is not an executable or the file does not exist\n");
+        destroy_pcb_ptr(new_pcb_ptr);
         return -1;
     }
 
     /* Setup Paging. Virt 128MB -> Physical 8MB, 12MB, 16MB, ... */
-    /* TBD Also need to map Kernel page at 4MB and Video memory */
-    pde_t* pg_dir = get_pg_dir(get_proc_index(new_pcb_ptr));
+    pde_t* new_pg_dir = get_pg_dir(get_proc_index(new_pcb_ptr));
     if ((map_page(TASK_PAGE_VIRT_ADDR, PHYSICAL_MEM_8MB + (PAGE_SIZE_4M * get_proc_index(new_pcb_ptr)), 
-                  PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, pg_dir) != 0) ||
+                  PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, new_pg_dir) != 0) ||
         (map_page(PAGE_BEGINNING_ADDR_4M, PAGE_BEGINNING_ADDR_4M, 
-                  PAGING_USER_SUPERVISOR | PAGING_READ_WRITE | PAGING_GLOBAL_PAGE, pg_dir) != 0)) {
+                  PAGING_USER_SUPERVISOR | PAGING_READ_WRITE | PAGING_GLOBAL_PAGE, new_pg_dir) != 0) ||
+        (map_page(VIDEO, VIDEO, 
+                  PAGING_USER_SUPERVISOR | PAGING_READ_WRITE | PAGING_GLOBAL_PAGE, new_pg_dir) != 0)) {
         LOG("Failed to map virtual memory for new process\n");
+        destroy_pcb_ptr(new_pcb_ptr);
+        cleanup_pg_dir(new_pg_dir);
         return -1;
     }
     /* Load the newly mapped Paging scheme */
-    set_cr3_reg(pg_dir);
-    /* TODO update PCB's pd_dir pointer */
+    set_cr3_reg(new_pg_dir);
+    if (get_global_pcb() == cur_pcb_ptr) {
+        cur_pcb_ptr->pg_dir = pg_dir;
+    }
+    new_pcb_ptr->pg_dir = new_pg_dir;
 
     /* Load the executable file */
     if (load_executable(exec_name) != 0) {
         LOG("Failed to load executable");
+        destroy_pcb_ptr(new_pcb_ptr);
+        cleanup_pg_dir(new_pg_dir);
+        if(cur_pcb_ptr == get_global_pcb())
+            set_cr3_reg(pg_dir);
+        else
+            set_cr3_reg(cur_pcb_ptr -> pg_dir);
         return -1;
     }
 
     /* Manipulate the TSS's ESP0 and SS0 to point to new process's stack */
     tss.ss0 = KERNEL_DS;
-    tss.esp0 = PHYSICAL_MEM_8MB - (KERNEL_STACK_SIZE * get_proc_index(new_pcb_ptr));
-    /* TBD Do we need ltr instruction? Maybe not? */
+    tss.esp0 = PHYSICAL_MEM_8MB - (KERNEL_STACK_SIZE * (get_proc_index(new_pcb_ptr) + 1));
+    
+    /* Push to the kernel stack that will be popped of by the IRET instruction to jump to user program */
+    asm volatile("pushl %0"::"b" (USER_DS)); /* Push User Program's SS */
+    asm volatile("pushl %0"::"b" (TASK_PAGE_VIRT_ADDR + PAGE_SIZE_4M - TASK_MEM_PADDING)); /* Push User Program's ESP */
+    asm volatile("pushfl"); /* Push User Program's EFLAGS */
+    asm volatile("pushl %0"::"b" (USER_CS)); /* Push User Program's CS */
+    asm volatile("pushl %0"::"b" (entry_addr)); /* Push User Program's Entry Address */
 
-    /* Manipulate the kernel stack to point to return to process's user space */
-    syscall_struct.cs = USER_CS;
-    syscall_struct.esp = TASK_PAGE_VIRT_ADDR + (PAGE_SIZE_4M * get_proc_index(new_pcb_ptr));
-    syscall_struct.ss = USER_DS;
-    syscall_struct.return_addr = entry_addr;
+    /* Update DS, ES to the user space's values */
     asm volatile("movl %0, %%edx;"
                  "movl %%edx, %%ds;"
                  "movl %%edx, %%es;"::"b" (USER_DS));
 
     /* Switch into user code */
-    asm volatile("iret;");
+    asm volatile("iret;"
+                 ".globl halt_ret;"
+                 "halt_ret:");
     /* This is where HALT instruction should come back to */
-
-    return 0;
+    /* Assign return value from HALT system call's status */
+    asm volatile("movl %%eax, %0":"=b" (ret_val));
+    return ret_val;
 }
 
+/*parse_command()
+  Given a string of command for EXECUTE system call, extract the command
+  (From beginnig character until the first SPACE character occurs), and
+  extract arguments (all characters after command)
+  Input : command - string to parse
+          exec_name - pointer to string to fill in parsed command
+          exec_args - pointer to string to fill in parsed arguments
+  Output : 0 if success
+           -1 if failed(if command is NULL or empty)
+ */
 static int32_t parse_command(const int8_t* command, int8_t* exec_name, int8_t* exec_args) {
     if (command == NULL) {
         LOG("command is null\n");
@@ -133,6 +179,15 @@ static int32_t parse_command(const int8_t* command, int8_t* exec_name, int8_t* e
     }
 }
 
+/*check_executable()
+  Given name of the executable, find a matching file from the file system,
+  check(if found) that the file is an executable file, and fill entry_addr
+  with the entry address of the program.
+  Input : exec_name - Name of executable file to be found
+          entry_addr - pointer to user program's entry point to be filled
+  Output : 0 on success, 
+           -1 on failure(if file is not found, or file is not an executable)
+ */
 static int32_t check_executable(const int8_t* exec_name, uint32_t* entry_addr) {
     file_header_t file_header;
     /* Open the file and read the header */
@@ -162,6 +217,12 @@ static int32_t check_executable(const int8_t* exec_name, uint32_t* entry_addr) {
     return 0;
 }
 
+/*load_executable()
+  Given the name of file, load the program at virtual memory 0x8048000
+  Input : exec_name - Name of the executable file to be loaded
+  Output : 0 on success, -1 on failure(file does not exist)
+  Side Effects : Update virtual memory page between 128MB ~ 132MB
+ */
 static int32_t load_executable(const int8_t* exec_name) {
     uint8_t buf[LOADER_BUFFER_SIZE];
     inode_t* inode_ptr = (inode_t *) open_file((uint8_t *) exec_name);
@@ -173,8 +234,8 @@ static int32_t load_executable(const int8_t* exec_name) {
     /* Copy executable */
     int32_t bytes_read;
     int32_t count = 0;
-    while ((bytes_read = read_file(inode_ptr, 0, buf, LOADER_BUFFER_SIZE)) != 0) {
-        memcpy((uint8_t *)(TASK_BEGIN_VIRT_ADDR + count), &buf, bytes_read);
+    while ((bytes_read = read_file(inode_ptr, count, buf, LOADER_BUFFER_SIZE)) != 0) {
+        memcpy((uint8_t *)(TASK_BEGIN_VIRT_ADDR + count), buf, bytes_read);
         count += bytes_read;
     }
 

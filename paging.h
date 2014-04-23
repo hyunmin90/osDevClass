@@ -28,6 +28,12 @@
 #define PAGE_BASE_ADDRESS_4K(addr) (addr & 0xFFFFF000)
 #define PAGE_BASE_ADDRESS_4M(addr) (addr & 0xFFC00000)
 
+#define PAGE_DIR_OFFSET(addr) ((addr & 0xFFC00000) >> 22)
+#define PAGE_TABLE_OFFSET(addr) ((addr & 0x003FF000) >> 12)
+
+
+
+
 /* Page Directory Entry */
 typedef union pde_t {
 	uint32_t val;
@@ -64,11 +70,21 @@ typedef union pte_t {
 	} __attribute__((packed));
 } pte_t;
 
+
+
+
 void init_paging(void);
 void enable_global_pages(uint32_t start_addr, uint32_t end_addr);
 
 int32_t map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flag, pde_t* pg_dir);
+
+int32_t map_page_vid(uint32_t virt_addr, uint32_t phys_addr, uint32_t flag, pde_t* pg_dir);
+
 pde_t* get_pg_dir(int32_t proc_index);
 void set_cr3_reg(pde_t* pg_dir);
+int32_t cleanup_pg_dir(pde_t* pg_dir);
 
+extern pde_t pg_dir[];
 #endif /* _PAGING_H */
+
+
