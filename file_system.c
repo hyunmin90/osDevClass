@@ -177,11 +177,20 @@ int32_t read_data(uint32_t inode, uint32_t offset, uint8_t* buf, uint32_t length
             -1 if the file with the given name does not exists, or fname is NULL
    Side Effects : None
  */
-int32_t open_file(const uint8_t* fname) {
+int32_t open_file(const uint8_t* filename) {
     dentry_t dentry;
-    if (fname == NULL || read_dentry_by_name(fname, &dentry) == -1) {
+    if (filename == NULL || read_dentry_by_name(filename, &dentry) == -1) {
         return -1;
     } else {
+        /* Update inode_ptr in PCB */
+        pcb_t* pcb_ptr = get_pcb_ptr();
+        uint32_t fd_index = find_free_fd_index(pcb_ptr); 
+        if(fd_index == -1)  
+          fd_index = MAX_FILE_INDEX;   
+        else
+          fd_index -= 1;
+        (pcb_ptr->file_array)[fd_index].inode_ptr = &inodes[dentry.inode_idx];
+
         return (int32_t) &inodes[dentry.inode_idx];
     }
 }
@@ -256,15 +265,15 @@ int32_t close_file(inode_t* inode_ptr) {
            -1 if the directory with the given name does not exists, or fname is NULL
    Side Effects : None
  */
-int32_t open_dir(const uint8_t* fname) {
+int32_t open_dir(const uint8_t* filename) {
     dentry_t dentry;
-    if(fname == NULL || 
-        read_dentry_by_name(fname, &dentry) == -1 ||
+    if(filename == NULL || 
+        read_dentry_by_name(filename, &dentry) == -1 ||
         dentry.file_type != FILE_TYPE_DIR) {
         return -1;
     } else {
         int i;
-        uint32_t fname_length = strlen((int8_t*) fname);
+        uint32_t fname_length = strlen((int8_t*) filename);
         if (fname_length > MAX_FILE_NAME_LENGTH) {
             /* Given file name is too long to even compare.
                We do this to avoid reading into file_type value as well
@@ -274,7 +283,7 @@ int32_t open_dir(const uint8_t* fname) {
         } else {
             for(i = 0; i < fs_stat.num_dir_entries; i++) {
                 /* Compare given fname with current dentry's file_name */
-                if (strncmp((int8_t*) fname, (int8_t*) dentries[i].file_name, fname_length) == 0) {
+                if (strncmp((int8_t*) filename, (int8_t*) dentries[i].file_name, fname_length) == 0) {
                     /* At this point, j is already incremented */
                     if (fname_length < MAX_FILE_NAME_LENGTH && dentries[i].file_name[fname_length] != 0) {
                         /* It means dentry's file_name is longer than given file_name */

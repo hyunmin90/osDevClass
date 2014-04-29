@@ -6,10 +6,11 @@ file_system.o: file_system.c file_system.h types.h lib.h keyboard.h \
   paging.h x86_desc.h pcb.h
 i8259.o: i8259.c i8259.h types.h lib.h keyboard.h
 interrupt_handler.o: interrupt_handler.c interrupt_handler.h x86_desc.h \
-  types.h lib.h keyboard.h debug.h rtc.h
+  types.h pcb.h file_system.h paging.h lib.h keyboard.h debug.h rtc.h
 kernel.o: kernel.c multiboot.h types.h x86_desc.h lib.h keyboard.h \
-  i8259.h debug.h paging.h interrupt_handler.h rtc.h file_system.h
-keyboard.o: keyboard.c keyboard.h types.h lib.h x86_desc.h i8259.h
+  i8259.h debug.h paging.h interrupt_handler.h pcb.h file_system.h rtc.h
+keyboard.o: keyboard.c keyboard.h types.h lib.h x86_desc.h i8259.h pcb.h \
+  file_system.h paging.h system_call.h debug.h
 lib.o: lib.c lib.h types.h keyboard.h
 paging.o: paging.c paging.h x86_desc.h types.h lib.h keyboard.h pcb.h \
   file_system.h debug.h

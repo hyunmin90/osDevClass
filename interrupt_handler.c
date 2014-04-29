@@ -4,6 +4,7 @@
 #include "debug.h"
 #include "keyboard.h"
 #include "rtc.h"
+#include "pcb.h"
 
 /* Build assembly linkages for exceptions */
 BUILD_IRQ(0x00)
@@ -70,6 +71,7 @@ static void (*interrupt[NR_IRQS])(void) = {
     IRQ0x2c_interrupt, IRQ0x2d_interrupt, IRQ0x2e_interrupt,
     IRQ0x2f_interrupt
 };
+
 /* common_handler()
    A common interrupt handler that gets called every time an exception,
    interrupt, or system call is invoked.
@@ -80,14 +82,11 @@ static void (*interrupt[NR_IRQS])(void) = {
    Saves and Restores Regs
 */
 void common_handler(int i) {
-    //SAVE_ALL
+    SAVE_ALL
     /* Exceptions */
     if(i >= VEC_LOWEST_EXCEPTION && i <= VEC_HIGHEST_EXCEPTION) {
         /* Call Halt to Squash Exceptions */
         printf("Exception %x Reached\n", i);
-        /*int p;
-        asm volatile("movl %%cr2, %0;" ::"b"(p));
-        printf("%x", p);*/
         asm volatile("movl $1, %%eax; movl %0, %%ebx;int $0x80;"::"b"(256));
     } 
     /* Regular Interrupts */
@@ -97,15 +96,24 @@ void common_handler(int i) {
             keyboard_handler(i);
         } else if(i == VEC_RTC_INT) {
             /* In case of RTC interrupt, hand control over to rtc_handler */
-            RTCreadCheck = 1;//The RTCReadcheck has been enabled
-            rtc_handler(i);	
-        } else {
+            
+			
+			rtc_handler(i);	
+			if(rtcreadcalled==1) //Check to see if RTC read has been called.
+			{	
+				
+				RTCreadCheck=1000;//RTC int has been called. Now exit the read loop
+			
+			}
+			
+		
+		} else {
             printf("Interrupts %x Reached\n", i);
         }
     } else {
         printf("Undefined Interrupt / Exception Reached\n");
     }
-    //RESTORE_ALL
+    RESTORE_ALL
 }
 
 /* init_idt()
@@ -158,3 +166,5 @@ void init_idt(void) {
     /* Load the IDT's beginning physical address into IDTR */
     lidt(idt_desc_ptr);
 }
+
+

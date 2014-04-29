@@ -18,6 +18,8 @@ pte_t pg_tables[MAX_NUM_PROCESS][NUM_PTE] __attribute__((aligned(PAGE_TABLE_SIZE
 /* Page Table for video mapping */
 pte_t pg_tables_vid[MAX_NUM_PROCESS][NUM_PTE] __attribute__((aligned(PAGE_TABLE_SIZE)));
 
+extern char* video_mem;
+
 /* init_paging()
    Initialize Paging. 
    Setup 0 ~ 4 MB region with 4KB paging options
@@ -63,8 +65,14 @@ void init_paging(void) {
     enable_global_pages(PAGE_BEGINNING_ADDR_4M, PAGE_BEGINNING_ADDR_4M + PAGE_SIZE_4M);
 	
     /* Setup pages for video memory. We need one 4KB pages since 2B * 80 * 25 ~ 4000 */
+    //map_page(VIDEO, VIDEO, 
+               //PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, pg_dir);
     enable_global_pages(VIDEO, VIDEO + PAGE_SIZE_4K);
-	
+    enable_global_pages(VIDEO_BUF_1, VIDEO_BUF_1 + PAGE_SIZE_4K);
+    enable_global_pages(VIDEO_BUF_2, VIDEO_BUF_2 + PAGE_SIZE_4K);
+    enable_global_pages(VIDEO_BUF_3, VIDEO_BUF_3 + PAGE_SIZE_4K);
+    map_page(USER_VIDEO, VIDEO,
+        PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, pg_dir);
     /* Set CR3 to be physical address of Page Directory */
     set_cr3_reg(pg_dir);
 
@@ -79,6 +87,8 @@ void init_paging(void) {
     asm volatile("mov %%cr0, %0": "=b"(cr0));
     cr0 |= 0x80000000;
     asm volatile("mov %0, %%cr0"::"b"(cr0));
+
+    video_mem = (char* )USER_VIDEO;
 }
 
 /* enable_global_pages()
@@ -149,32 +159,40 @@ int32_t get_proc_index_for_pg_dir(pde_t* pg_dir) {
   Side Effects : Update Page Directory Entry and/or Page Directory Entry to newly map 
                  virtual address to physical address
 */
-int32_t map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flag, pde_t* pg_dir) {
+int32_t map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flag, pde_t* cur_pg_dir) {
     if (virt_addr < PAGE_BEGINNING_ADDR_4M) {
       uint32_t read_write = flag & PAGING_READ_WRITE;
       uint32_t global_page = flag & PAGING_GLOBAL_PAGE;
       uint32_t user_supervisor = flag & PAGING_USER_SUPERVISOR;
+
       /* Find Process # */
-      int i = get_proc_index_for_pg_dir(pg_dir);
-      if(i == -1)
+      int i = get_proc_index_for_pg_dir(cur_pg_dir);
+      if(i == -1 && cur_pg_dir != pg_dir)
         return -1;
 
+      pte_t* cur_pg_table;
+      if(cur_pg_dir == pg_dir)
+        cur_pg_table = pg_table;
+      else
+        cur_pg_table = pg_tables[i];
+      
       /* Fill in PDE */
-      pde_t* pde = &pg_dir[PAGE_DIR_OFFSET(virt_addr)]; 
+      pde_t* pde = &cur_pg_dir[PAGE_DIR_OFFSET(virt_addr)]; 
       if (!(pde->val & PAGING_PRESENT)) {
-        pde->val = PAGE_BASE_ADDRESS_4K((uint32_t) pg_tables[i]) | PAGING_PRESENT | read_write |
+        pde->val = PAGE_BASE_ADDRESS_4K((uint32_t) cur_pg_table) | PAGING_PRESENT | read_write |
                                         global_page | user_supervisor;
       }
 
+      pte_t* pte = &cur_pg_table[PAGE_TABLE_OFFSET(virt_addr)];
+    
       /* Fill in PTE */
-      pte_t* pte = &pg_tables[i][PAGE_TABLE_OFFSET(virt_addr)];
       if(pte->val & PAGING_PRESENT)
         return -1;
       pte->val = PAGE_BASE_ADDRESS_4K(phys_addr) | PAGING_PRESENT | read_write |
         read_write | global_page | user_supervisor;
       return 0;
     } else {
-      pde_t* pde = &pg_dir[PAGE_DIR_OFFSET(virt_addr)];
+      pde_t* pde = &cur_pg_dir[PAGE_DIR_OFFSET(virt_addr)];
       if (pde->val & PAGING_PRESENT) {
           /* Since we are not implementing swap now, treat PRESENT bit as existence of pde/pte or not*/
           LOG("You cannot map a page that is already mapped(Present bit is 1 already)\n");
@@ -189,6 +207,50 @@ int32_t map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flag, pde_t* p
       return 0;
     }
 }
+
+int32_t remap_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flag, pde_t* pg_dir) {
+    if (virt_addr < PAGE_BEGINNING_ADDR_4M) {
+      uint32_t read_write = flag & PAGING_READ_WRITE;
+      uint32_t global_page = flag & PAGING_GLOBAL_PAGE;
+      uint32_t user_supervisor = flag & PAGING_USER_SUPERVISOR;
+      /* Find Process # */
+      int i = get_proc_index_for_pg_dir(pg_dir);
+      if(i == -1)
+        return -1;
+
+      /* Fill in PDE */
+      pde_t* pde = &pg_dir[PAGE_DIR_OFFSET(virt_addr)]; 
+      if ((pde->val & PAGING_PRESENT)) {
+        pde->val = PAGE_BASE_ADDRESS_4K((uint32_t) pg_tables[i]) | PAGING_PRESENT | read_write |
+                                        global_page | user_supervisor;
+      }
+      else
+        LOG("Trying to remap a page that has not been ampped!\n");
+
+      /* Fill in PTE */
+      pte_t* pte = &pg_tables[i][PAGE_TABLE_OFFSET(virt_addr)];
+      if(!(pte->val & PAGING_PRESENT))
+        return -1;
+      pte->val = PAGE_BASE_ADDRESS_4K(phys_addr) | PAGING_PRESENT | read_write |
+        read_write | global_page | user_supervisor;
+      return 0;
+    } else {
+      pde_t* pde = &pg_dir[PAGE_DIR_OFFSET(virt_addr)];
+      if (!(pde->val & PAGING_PRESENT)) {
+          /* Since we are not implementing swap now, treat PRESENT bit as existence of pde/pte or not*/
+          LOG("You cannot remap a page that is not already mapped(Present bit is 0)\n");
+          return -1;
+      }
+      uint32_t read_write = flag & PAGING_READ_WRITE;
+      uint32_t global_page = flag & PAGING_GLOBAL_PAGE;
+      uint32_t user_supervisor = flag & PAGING_USER_SUPERVISOR;
+      
+      pde->val = PAGE_BASE_ADDRESS_4M(phys_addr) | PAGING_PAGE_SIZE | PAGING_PRESENT |
+          read_write | global_page | user_supervisor;
+      return 0;
+    }
+}
+
 /*map_page_vid()
   video map paging function - only deals with 4kb paging
   Input : virt_addr - Virtual address of the page to map from

@@ -6,6 +6,7 @@
 #include "pcb.h"
 #include "x86_desc.h"
 #include "debug.h"
+#include "keyboard.h" // only for NUM_TERMINALS
 
 #define FD_ENTRY_MIN 2
 #define FD_ENTRY_MAX 7
@@ -16,7 +17,11 @@ extern void* halt_ret;
 extern file_ops_t file_ops_ptrs[FILE_OPS_PTRS_SIZE];
 extern inode_t* inodes;
 
-static const file_desc_t empty_file_desc;
+////////
+pcb_t* top_process[NUM_TERMINALS] = {NULL, NULL, NULL}; 	// Top Running Process's PCB in terminal	
+int32_t num_progs[NUM_TERMINALS] = {0, 0 ,0};				// # of Progs running in each Terminal
+///////////
+
 /* Halt Function
    Halt System Call
    Terminates Caller Process
@@ -28,16 +33,39 @@ static const file_desc_t empty_file_desc;
 */
 int32_t halt(uint32_t status)
 {
-	//status = status & HALT_ARG_BITMASK;
+	// TODO: Need to expand 8-bit argument into 32-bit
+	// STATUS needs to be uint32_t
 	LOG("halt with status %d\n", status);
 
 	pcb_t* current_pcb_ptr = get_pcb_ptr();
 	pcb_t* parent_pcb_ptr = current_pcb_ptr->parent_pcb;
+	int32_t current_terminal = get_current_terminal();
 
+	if(num_progs[current_terminal] == 1){
+		tss.esp0 = PHYSICAL_MEM_8MB - (KERNEL_STACK_SIZE * (get_proc_index(current_pcb_ptr) + 1));
+		tss.ss0 = KERNEL_DS;
+		printf("Exiting Last Shell. Firing New Shell\n");
+		set_cr3_reg(pg_dir);
+
+		if (cleanup_pg_dir(current_pcb_ptr->pg_dir) != 0) {
+			LOG("Fatal error while tearing down page directory.\n");
+		}
+		if(destroy_pcb_ptr(current_pcb_ptr) != 0) {
+			LOG("Cannot Destroy PCB_ptr no matching PCB found.\n");
+		}
+		num_progs[current_terminal]--;
+
+		uint8_t exec_cmd[15] = "shell";
+		if(-1 == sys_execute(exec_cmd)){
+			LOG("FATAL ERROR! Shell failed to execute inside Halt!\n");
+		}
+	}
 	if(parent_pcb_ptr == NULL) {
 		LOG("No parent PCB pointer presents.\n");
 		return -1;
 	}
+
+	// TODO: POINT ESP0 to bottom of the system call ?
 	// TSS:esp0 <- parent's esp0
 	tss.esp0 = parent_pcb_ptr->esp0;
 	// TSS:ss0 <- parent's ss0
@@ -50,9 +78,19 @@ int32_t halt(uint32_t status)
 		LOG("Fatal error while tearing down page directory.\n");
 	}
 
+	///////////////////
+	/* Since we are Halting, update the top process 
+	as the parent process. Decrement the num_progs */
+    top_process[current_terminal] = parent_pcb_ptr;
+    num_progs[current_terminal]--;
+    //////////////////
+
 	if(destroy_pcb_ptr(current_pcb_ptr) != 0) {
 		LOG("Cannot Destroy PCB_ptr no matching PCB found.\n");
 	}
+
+
+
 	/* update esp to point to top of parent's kernel stack
 	   update ebp
 	   Return Value */
@@ -70,10 +108,10 @@ int32_t halt(uint32_t status)
 	return 0;
 }
 
-int32_t sys_execute(syscall_struct_t syscall_struct)
+int32_t sys_execute(const uint8_t* command)
 {
 	LOG("sys_execute\n");
-	return do_execute(syscall_struct);
+	return do_execute((int8_t*) command);
 }
 
 /* sys_read :
@@ -137,7 +175,6 @@ int32_t sys_open (const uint8_t* filename)
 {
 	LOG("sys_open\n");
 	pcb_t* pcb_ptr = get_pcb_ptr();
-	int32_t (*open_ptr) (int32_t);
 
 	/* Find Free Space */
 	uint32_t fd_index = find_free_fd_index(pcb_ptr);
@@ -154,22 +191,22 @@ int32_t sys_open (const uint8_t* filename)
 	/* Update pcb according to filetype */
 	(pcb_ptr->file_array)[fd_index].flags = 1;
 	(pcb_ptr->file_array)[fd_index].file_position = 0;
+
 	if(curr_file.file_type == FILE_TYPE_RTC) {
 		(pcb_ptr->file_array)[fd_index].file_ops = &file_ops_ptrs[RTC_FILE_OPS_IDX];
-		(pcb_ptr->file_array)[fd_index].inode_ptr = NULL;
 	} else if (curr_file.file_type == FILE_TYPE_DIR) {
 		(pcb_ptr->file_array)[fd_index].file_ops = &file_ops_ptrs[DIR_FILE_OPS_IDX];
-		(pcb_ptr->file_array)[fd_index].inode_ptr = NULL;
 		(pcb_ptr->file_array)[fd_index].file_position = i;
 	} else {
 		(pcb_ptr->file_array)[fd_index].file_ops = &file_ops_ptrs[REG_FILE_OPS_IDX];
-		(pcb_ptr->file_array)[fd_index].inode_ptr = (inode_t*)open_file(filename);
 	}
 
 	/* Call Open Function */
-	open_ptr = (((pcb_ptr -> file_array)[fd_index]).file_ops -> open);
-	open_ptr((int32_t)filename);
-	
+	int32_t open_success;
+	open_success = (((pcb_ptr -> file_array)[fd_index]).file_ops -> open)((int32_t) filename);
+	if(open_success == -1)
+		destroy_fd(pcb_ptr, fd_index);
+
 	return fd_index;
 }
 
@@ -194,12 +231,10 @@ int32_t sys_close (int32_t fd)
 		return -1;
 
 	/* Call Close */
-	int32_t (*close_ptr) (int32_t);
-	close_ptr = (((pcb_ptr -> file_array)[fd]).file_ops -> close);
-	close_ptr((int32_t)(pcb_ptr -> file_array[fd]).inode_ptr);
+	(((pcb_ptr -> file_array)[fd]).file_ops -> close)((int32_t)(pcb_ptr -> file_array[fd]).inode_ptr);
 
 	/* Empty out file array */
-	pcb_ptr -> file_array[fd] = empty_file_desc;
+	destroy_fd(pcb_ptr, fd);
 	return 0;
 }
 

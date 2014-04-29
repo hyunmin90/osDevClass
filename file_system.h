@@ -65,7 +65,7 @@ int32_t read_dentry_by_index(uint32_t index, dentry_t* dentry);
 int32_t read_data(uint32_t inode, uint32_t offset, uint8_t* buf, uint32_t length);
 
 /* Open, read, write, close functions on files for system call functions support */
-int32_t open_file(const uint8_t* fname);
+int32_t open_file(const uint8_t* filename);
 int32_t read_file(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t length);
 int32_t write_file(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t length);
 int32_t close_file(inode_t* inode_ptr);
@@ -74,7 +74,7 @@ int32_t read_file_wrapper(int32_t fd, uint8_t* buf, uint32_t length);
 int32_t read_dir_wrapper(int32_t fd, uint8_t* buf, uint32_t length);
 
 /* Open, read, write, close functions on directories for system call functions support */
-int32_t open_dir(const uint8_t* fname);
+int32_t open_dir(const uint8_t* filename);
 int32_t read_dir(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t length);
 int32_t write_dir(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t length);
 int32_t close_dir(inode_t* inode_ptr);

@@ -71,7 +71,7 @@ void rtc_init()
  *   SIDE EFFECTS: none 
  *			 	
  */   
-int32_t rtc_open(int32_t dummy)
+int32_t rtc_open()
 {
 	uint8_t temp;
 	// calls register A, which is responsible for handling frequency
@@ -86,7 +86,7 @@ int32_t rtc_open(int32_t dummy)
 }
 
 /*
- *   rtc_read
+ *   rtc_readb
  *   DESCRIPTION: RTC read wait's until the rtc interrupt occurs. If it does occur, it returns 0
  *   else it wait until RTC interrupt occurs
  *   INPUTS: none
@@ -97,12 +97,15 @@ int32_t rtc_open(int32_t dummy)
  */   
 
 int32_t rtc_read()
-{
-	while(RTCreadCheck!=1) //wait until RTC handler set the RTCreadCheck to 1
-	{
+{	
 	
+	rtcreadcalled=1;
+	
+	while(RTCreadCheck!=1000) //wait until RTC handler set the RTCreadCheck to 1
+	{
+		
 	}
-    
+    rtcreadcalled=0;//Put it back to init flag
 	RTCreadCheck = 0;
 	return 0; 	//Since the RTC interrupt has occured, return 0 with success
 
@@ -216,7 +219,7 @@ void rtc_test()
 	while(1)	//wait until rtc_read respond for having rtc interrupt
 	{
 	
-	rtc_read(0);
+	rtc_read();
 	printf("hihi"); //RTC read successful. Print hi for showing freq rate
 	
 	}

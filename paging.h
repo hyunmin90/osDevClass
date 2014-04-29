@@ -77,6 +77,7 @@ void init_paging(void);
 void enable_global_pages(uint32_t start_addr, uint32_t end_addr);
 
 int32_t map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flag, pde_t* pg_dir);
+int32_t remap_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flag, pde_t* pg_dir);
 
 int32_t map_page_vid(uint32_t virt_addr, uint32_t phys_addr, uint32_t flag, pde_t* pg_dir);
 

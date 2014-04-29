@@ -178,7 +178,7 @@ entry (unsigned long magic, unsigned long addr)
 	 * without showing you any output */
 	printf("Enabling Interrupts\n");
 	sti();
-
+	terminal_open();
 	/* Test file_system driver */
     //test_file_system_driver();
 

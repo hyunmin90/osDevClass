@@ -2,6 +2,7 @@
 #define _INTERRUPT_HANDLER_H
 
 #include "x86_desc.h"
+#include "pcb.h"
 
 #define NR_EXCEPTIONS 			21
 #define NR_IRQS 				16

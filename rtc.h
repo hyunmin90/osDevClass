@@ -42,7 +42,7 @@ void rtc_handler(int i);
 /* Initialize RTC */
 void rtc_init();
 /*Open rtc. Set the freq to 2hz*/
-int32_t rtc_open(int32_t dummy);
+int32_t rtc_open();
 /*Read from RTC. Wait until rtc interrupt occurs*/
 int32_t rtc_read();
 /*Write the frequency desired */
@@ -59,7 +59,8 @@ extern void test_interrupts();
 
 /*Variable that checks if RTC interrupt occured or not*/
 volatile int RTCreadCheck;
-
+/*Flag for checking if read has been called*/
+volatile int rtcreadcalled;
 
 #endif /* _RTC_H */
 

@@ -6,6 +6,7 @@
 #include "debug.h"
 
 static const pcb_t empty_pcb;
+static const file_desc_t empty_file_desc;
 
 pcb_t* global_pcb_ptrs[MAX_NUM_PROCESS];
 
@@ -61,6 +62,10 @@ int32_t destroy_pcb_ptr(pcb_t* pcb_ptr) {
     return 0;
 }
 
+int32_t destroy_fd(pcb_t* pcb_ptr, int32_t fd){
+  pcb_ptr -> file_array[fd] = empty_file_desc;
+  return 0;
+}
 /*get_pcb_ptr()
   Get current PCB's pointer calculated by manipulating bits of current ESP
   Output : Current kernel stack's PCB's pointer

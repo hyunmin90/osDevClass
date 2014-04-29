@@ -8,6 +8,15 @@
 #include "types.h"
 #include "keyboard.h"
 #define VIDEO 0xB8000
+#define VIDEO_BUF_1	0xB9000
+#define VIDEO_BUF_2 0xBA000
+#define VIDEO_BUF_3 0xBB000
+#define USER_VIDEO  0xBC000
+
+#define NUM_COLS 80
+#define NUM_ROWS 25
+#define ATTRIB 0x7
+
 
 int32_t printf(int8_t *format, ...);
 void putc(uint8_t c);
