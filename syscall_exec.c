@@ -12,16 +12,16 @@
 #define TASK_BEGIN_VIRT_ADDR 0x8048000
 #define TASK_ENTRY_PTR_VIRT_ADDR 0x8000000
 #define LOADER_BUFFER_SIZE 16
-#define TASK_MEM_PADDING 4
+#define TASK_MEM_PADDING 16
+#define EFLAGS_BASE 2
+#define EFLAGS_STI (1 << 9)
 
 static int32_t parse_command(const int8_t* command, int8_t* exec_name, int8_t* exec_args);
 static int32_t check_executable(const int8_t* exec_name, uint32_t* entry_addr);
 static int32_t load_executable(const int8_t* exec_name);
 
-///////////////////
 extern pcb_t* top_process[NUM_TERMINALS];
 extern int32_t num_progs[NUM_TERMINALS];
-///////////////////
 
 /*do_execute()
   Execute a new process and set the current process to be parent process of the newly spawned process
@@ -44,6 +44,7 @@ extern int32_t num_progs[NUM_TERMINALS];
                  User program's HALT system call JMP's into this function
  */
 int32_t do_execute(const int8_t* command) {
+    asm volatile("cli");
     LOG("do_execute called\n");
     int32_t ret_val = 0;
 
@@ -62,14 +63,17 @@ int32_t do_execute(const int8_t* command) {
     LOG("new process with parent process %d\n", get_proc_index(get_pcb_ptr()));
     new_pcb_ptr->parent_pcb = cur_pcb_ptr;
 
-    //////////
+    /* Newly created process will run in currently displayed terminal */
     new_pcb_ptr -> terminal_num = get_displayed_terminal();
-    /////////
 
-
-    asm volatile("movl %%esp, %0": "=b"(cur_pcb_ptr->esp0));
-    asm volatile("movl %%ss, %0": "=b"(cur_pcb_ptr->ss0));
-    asm volatile("movl %%ebp, %0": "=b"(cur_pcb_ptr->ebp));
+    /* If there is another program already running in same terminal, save ESP,EBP,SS
+       in order to be able to come back to parent when Halt system call is called */
+    if(num_progs[new_pcb_ptr -> terminal_num] != 0){
+        asm volatile("movl %%esp, %0": "=b"(cur_pcb_ptr->esp));
+        asm volatile("movl %%ss, %0": "=b"(cur_pcb_ptr->ss0));
+        asm volatile("movl %%ebp, %0": "=b"(cur_pcb_ptr->ebp));
+        cur_pcb_ptr -> esp0 = tss.esp0;
+    }
     
     /* Parse command */
     if (parse_command(command, new_pcb_ptr->cmd_name, new_pcb_ptr->cmd_args) != 0) {
@@ -91,8 +95,7 @@ int32_t do_execute(const int8_t* command) {
     pde_t* new_pg_dir = get_pg_dir(get_proc_index(new_pcb_ptr));
     
 
-    //////////////////
-    /* Map the Video Buffers */
+    /* Map the Video memory and Video memory buffers */
     if((map_page(VIDEO_BUF_1, VIDEO_BUF_1,
         PAGING_USER_SUPERVISOR | PAGING_READ_WRITE | PAGING_GLOBAL_PAGE, new_pg_dir) != 0) ||
        (map_page(VIDEO_BUF_2, VIDEO_BUF_2,
@@ -100,13 +103,12 @@ int32_t do_execute(const int8_t* command) {
        (map_page(VIDEO_BUF_3, VIDEO_BUF_3,
         PAGING_USER_SUPERVISOR | PAGING_READ_WRITE | PAGING_GLOBAL_PAGE, new_pg_dir) != 0) ||
        (map_page(USER_VIDEO, VIDEO,
-        PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, new_pg_dir) != 0)){
+        PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, new_pg_dir) != 0)) {
         LOG("Failed to map virtual video buffers for new process\n");
         destroy_pcb_ptr(new_pcb_ptr);
         cleanup_pg_dir(new_pg_dir);
         return -1;
     }
-    //////////////
 
     if ((map_page(TASK_PAGE_VIRT_ADDR, PHYSICAL_MEM_8MB + (PAGE_SIZE_4M * get_proc_index(new_pcb_ptr)), 
                   PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, new_pg_dir) != 0) ||
@@ -119,6 +121,7 @@ int32_t do_execute(const int8_t* command) {
         cleanup_pg_dir(new_pg_dir);
         return -1;
     }
+
     /* Load the newly mapped Paging scheme */
     set_cr3_reg(new_pg_dir);
     if (get_global_pcb() == cur_pcb_ptr) {
@@ -138,25 +141,22 @@ int32_t do_execute(const int8_t* command) {
         return -1;
     }
 
-
-    /////////////
-    /* Update the top_process with the new process 
-     * Increment the num of programs running */
-    int32_t current_terminal = get_displayed_terminal();
-    top_process[current_terminal] = new_pcb_ptr;
-    num_progs[current_terminal]++;
-    /////////////
-
     /* Manipulate the TSS's ESP0 and SS0 to point to new process's stack */
     tss.ss0 = KERNEL_DS;
     tss.esp0 = PHYSICAL_MEM_8MB - (KERNEL_STACK_SIZE * (get_proc_index(new_pcb_ptr) + 1));
     
     /* Push to the kernel stack that will be popped of by the IRET instruction to jump to user program */
     asm volatile("pushl %0"::"b" (USER_DS)); /* Push User Program's SS */
-    asm volatile("pushl %0"::"b" (TASK_PAGE_VIRT_ADDR + PAGE_SIZE_4M)); /* Push User Program's ESP */
-    asm volatile("pushfl"); /* Push User Program's EFLAGS */
+    asm volatile("pushl %0"::"b" (TASK_PAGE_VIRT_ADDR + PAGE_SIZE_4M - TASK_MEM_PADDING)); /* Push User Program's ESP */
+    asm volatile("pushl %0"::"b" (EFLAGS_STI | EFLAGS_BASE)); /* Push User Program's EFLAGS with Interrupt enabled */
     asm volatile("pushl %0"::"b" (USER_CS)); /* Push User Program's CS */
     asm volatile("pushl %0"::"b" (entry_addr)); /* Push User Program's Entry Address */
+
+    /* Update the top_process with the new process 
+     * Increment the num of programs running */
+    int32_t current_terminal = get_displayed_terminal();
+    top_process[current_terminal] = new_pcb_ptr;
+    num_progs[current_terminal]++;
 
     /* Update DS, ES to the user space's values */
     asm volatile("movl %0, %%edx;"

@@ -34,15 +34,22 @@ Represents the bit 6 of Register B */
 #define WRONGFREQ 20 //Wrong frequency in range.not in power of two
 #define CBIT1 0x0F //Clear the bits not related.
 #define CBIT2 0xF0 //Clear bits not related
+#define FIRST_FREQ 1 // 2hz set up
+#define NUM_FREQ	11 //Number of freuqnecy's for our RTC
+#define MAX_SELECT_BIT 16 //The first Select BIT
+#define MAX_NUMB_TERMINAL 3 //Max number of terminal
 
-#define NUM_FREQ	11
+/* read check constants */
+#define READ_OFF 0
+#define READ_ON 1
+
 
 /* Handle RTC */
 void rtc_handler(int i);
 /* Initialize RTC */
 void rtc_init();
 /*Open rtc. Set the freq to 2hz*/
-int32_t rtc_open();
+int32_t rtc_open(uint32_t dummy);
 /*Read from RTC. Wait until rtc interrupt occurs*/
 int32_t rtc_read();
 /*Write the frequency desired */
@@ -58,11 +65,9 @@ this line is to simply avoid warning */
 extern void test_interrupts();
 
 /*Variable that checks if RTC interrupt occured or not*/
-volatile int RTCreadCheck;
+volatile int RTCreadCheck[3];
 /*Flag for checking if read has been called*/
-volatile int rtcreadcalled;
+volatile int rtcreadcalled[3];
 
 #endif /* _RTC_H */
-
-
 

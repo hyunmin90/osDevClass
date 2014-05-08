@@ -20,7 +20,6 @@ int screen_x[NUM_TERMINALS];
 int screen_y[NUM_TERMINALS];
 
 char* video_mem = (char *)VIDEO;
-
 /*
 * void clear(void);
 *   Inputs: void
@@ -30,12 +29,15 @@ char* video_mem = (char *)VIDEO;
 
 void
 clear(void)
-{
+{	
+	char* temp_vid = video_mem;
+	video_mem = (char *)VIDEO;
     int32_t i;
     for(i=0; i<NUM_ROWS*NUM_COLS; i++) {
         *(uint8_t *)(video_mem + (i << 1)) = ' ';
         *(uint8_t *)(video_mem + (i << 1) + 1) = ATTRIB;
     }
+	video_mem = temp_vid;
 }
 
 
@@ -197,15 +199,30 @@ puts(int8_t* s)
 void
 putc(uint8_t c)
 {
-	/* Get the terminal the caller is executing in */
-	int32_t curr_terminal = get_current_terminal();
+	int key_press = get_key_press();
+	int32_t curr_terminal;
+
+	/* If putc is called by system call */
+	if(key_press == 0){
+		asm volatile ("cli"); // Protect with cli
+		curr_terminal = get_current_terminal();	
+	}
+	/* If putc is called by keyboard interrupt */
+	else{
+		curr_terminal = get_displayed_terminal();	//want to write to displayed terminal
+		video_mem = (char *)VIDEO;	
+	}
+	
+	/* Get the terminal the caller is executing in */	
+	//curr_terminal = get_current_terminal();
 	
     if(c == '\n' || c == '\r') {
     	/* If not at bottom row, don't provide Scrolling */
     	if(screen_y[curr_terminal] != NUM_ROWS - 1){
         	screen_y[curr_terminal]++;
         	screen_x[curr_terminal]= 0;
-        	update_cursor(screen_y[curr_terminal], screen_x[curr_terminal]);
+       		if(curr_terminal == get_displayed_terminal())
+        		update_cursor(screen_y[curr_terminal], screen_x[curr_terminal]);
     	}
     	/* At Bottom Row - Provide Scrolling */
     	else{
@@ -213,7 +230,8 @@ putc(uint8_t c)
     		memcpy(video_mem, video_mem + ((NUM_COLS * 1 + 0) << 1), (NUM_COLS * (NUM_ROWS - 1) * 2));
         	screen_x[curr_terminal] = 0;
         	clear_row(NUM_ROWS - 1);
-        	update_cursor(screen_y[curr_terminal], screen_x[curr_terminal]);
+        	if(curr_terminal == get_displayed_terminal())
+        		update_cursor(screen_y[curr_terminal], screen_x[curr_terminal]);
     	}
     } 
     else {
@@ -227,16 +245,26 @@ putc(uint8_t c)
         	memcpy(video_mem, video_mem + ((NUM_COLS * 1 + 0) << 1), (NUM_COLS * (NUM_ROWS - 1) * 2));
         	screen_x[curr_terminal] = 0;
         	clear_row(NUM_ROWS - 1);
-        	update_cursor(screen_y[curr_terminal], screen_x[curr_terminal]);
+        	if(curr_terminal == get_displayed_terminal())
+        		update_cursor(screen_y[curr_terminal], screen_x[curr_terminal]);
         }
         /* Not at Bottom-Right of Screen, don't Provide Scrolling */
        	else{    
         	screen_y[curr_terminal] = (screen_y[curr_terminal] + (screen_x[curr_terminal] / (NUM_COLS - 1))) % NUM_ROWS;
         	screen_x[curr_terminal]++;
         	screen_x[curr_terminal] %= NUM_COLS;
-        	update_cursor(screen_y[curr_terminal], screen_x[curr_terminal]);
+        	if(curr_terminal == get_displayed_terminal())
+        		update_cursor(screen_y[curr_terminal], screen_x[curr_terminal]);
         }
  	}
+
+ 	/* Point video_mem back to USER_VIDEO */
+ 	if(key_press == 1)
+ 	video_mem = (char *)USER_VIDEO;
+
+ 	/* Unprotect section */
+ 	if(key_press == 0)
+		asm volatile ("sti");
 }
 
 /*
@@ -619,11 +647,11 @@ test_interrupts(void)
 void
 reset_screen(void)
 {
-	int32_t curr_terminal = get_current_terminal();
+	int32_t displayed_terminal = get_displayed_terminal();
 	clear();
-	screen_x[curr_terminal] = 0;
-	screen_y[curr_terminal] = 0;
-	update_cursor(screen_x[curr_terminal], screen_y[curr_terminal]);
+	screen_x[displayed_terminal] = 0;
+	screen_y[displayed_terminal] = 0;
+	update_cursor(screen_x[displayed_terminal], screen_y[displayed_terminal]);
 }
 
 /* clear_row function
@@ -655,7 +683,8 @@ clear_row(int row)
 void
 backspace(void)
 {
-	int32_t curr_terminal = get_current_terminal();
+	video_mem = (char *)VIDEO;
+	int32_t curr_terminal = get_displayed_terminal();
 	/* Not start of Line -- Delete Prev Char,
 	 * Adjust Screen_x and Cursor */
 	if(screen_x[curr_terminal] != 0){
@@ -673,6 +702,7 @@ backspace(void)
     	*(uint8_t *)(video_mem + ((NUM_COLS * screen_y[curr_terminal] + screen_x[curr_terminal]) << 1) + 1) = ATTRIB;
     	update_cursor(screen_y[curr_terminal],screen_x[curr_terminal]);
 	}
+	video_mem = (char *)USER_VIDEO;
 }
 
 /* update_cursor function

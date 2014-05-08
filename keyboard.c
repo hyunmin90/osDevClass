@@ -6,17 +6,7 @@
 #include "system_call.h"
 #include "debug.h"
 
-/* Keyboard R/W */
-#define kbd_read_input()		inb(KBD_DATA_PORT)
-#define kbd_read_status()		inb(KBD_STATUS_PORT)
-#define kbd_write_output(val)	outb(val, KBD_DATA_PORT)
-#define kbd_write_command(val)  outb(val, KBD_CNTL_PORT)
-
-#define KEYS 0
-#define SHIFT_KEYS 1
-#define BACK 2
-
-/* Keyboard Keys in Increasing Scan Code Order */
+/* Keyboard Keys without Shift Press in Increasing Scan Code Order */
 char keys[] = {
 	'\0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
 	'-', '=', '\0', '\0', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i',
@@ -25,7 +15,7 @@ char keys[] = {
 	'v', 'b', 'n', 'm', ',', '.', '/', '\0', '\0', '\0', ' ', '\0'
 };
 
-/* Keyboard Keys when Shift is Pressed */
+/* Keyboard Keys when Shift is Pressed in Increasing Scan Code Order */
 char shift_keys[] = {
 	'\0', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')',
 	'_', '+', '\0', '\0', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I',
@@ -34,32 +24,40 @@ char shift_keys[] = {
 	'V', 'B', 'N', 'M', '<', '>', '?', '\0', '\0', '\0', ' ', '\0' 
 };
 
-char terminal_buf[NUM_TERMINALS][BUFFER_SIZE];	// Terminal Buffer
-volatile int index[NUM_TERMINALS];				// Current Index of terminal_buf 
+/* Buffer to hold keys written to screen for read */
+char terminal_buf[NUM_TERMINALS][BUFFER_SIZE];	
+/* Current Index of terminal_buf */ 
+volatile int index[NUM_TERMINALS];				
 
+/* Indicates if corresponding key is pressed */
 int alt_press = 0;
 int shift_press = 0;
 int ctrl_press = 0;
 int caps_on = 0;
+int key_press = 0;
 
-int read_on[NUM_TERMINALS] = {0, 0, 0};					//Indicates whether a read is being performed
-volatile int read_return[NUM_TERMINALS] = {0, 0, 0};	// Indicates whether an enter has been pressed during a read
+/* Indicates whether a read is being performed */
+int read_on[NUM_TERMINALS] = {0, 0, 0};
+/* Indicates whether an enter has been pressed during a read */					
+volatile int read_return[NUM_TERMINALS] = {0, 0, 0};	
 
+extern int32_t num_progs[NUM_TERMINALS]; 
+extern pcb_t* top_process[NUM_TERMINALS];	
 
-int32_t displayed_terminal = TERMINAL_1;	// Current Terminal on Display
+/* Current positions of cursor (per terminal) */
+extern int screen_x[NUM_TERMINALS];			
+extern int screen_y[NUM_TERMINALS];			
 
-extern int32_t num_progs[NUM_TERMINALS];
-extern int screen_x[NUM_TERMINALS];
-extern int screen_y[NUM_TERMINALS];
-extern pcb_t* top_process[NUM_TERMINALS];
+/* Current Terminal on Display, intially Terminal 1 */
+int32_t displayed_terminal = TERMINAL_1;	
 
 /* keyboard_handler()
    An Interrupt Handler that is Called When 
    Key is Pressed on Keyboard
    Input : i -- interrupt vector
    Output : None
-   Side Effect : Handle keyboard interrupt
-   				 Prints key Pressed to Screen
+   Side Effect : Handle keypress functions
+   				 Prints keys Pressed to Screen accordingly
                  Issue EOI(End Of Interrupt) to unmask keyboard interrupt 
 */
 void keyboard_handler(int i)
@@ -67,47 +65,45 @@ void keyboard_handler(int i)
 	/* Grab Key Pressed*/
 	uint8_t keycode;
 	keycode = kbd_read_input();
-	int32_t curr_terminal= get_current_terminal();
+
+	/* Indicate a key has been pressed */
+	key_press = 1;
+	int32_t display_terminal= get_displayed_terminal();
+
 	/* Print Only Keys Pressed, NOT Key Release 
 	 * No Print for CTRL/SHIFT/Backspace/Caps
 	 * Carries out Functionality Instead */
 	if(keycode <= KEY_RELEASE_VALUE){
+		/* Condition Key Press */
 		if (keycode == ALT)
 			alt_press += 1;
-
 		else if(keycode == L_SHIFT || keycode == R_SHIFT)	
 			shift_press += 1;
-
 		else if (keycode == CTRL)
 			ctrl_press += 1;
-
 		else if (keycode == CAPS_LOCK)
 			caps_on = !caps_on;
 
+		/* CTRL-L Clear Screen */
 		else if(keycode == L && ctrl_press > 0)
 			reset_screen();
 
+		/* Backspace */
 		else if (keycode == BACKSPACE){
-			if(read_on[curr_terminal] == 0)
+			/* Don't backspace when reading and at start of buffer*/
+			if(read_on[display_terminal] == 0 || (index[display_terminal] != 0 && read_on[display_terminal] == 1))
 				backspace();
 			update_terminal_buf(BACK,keycode);
 		}
-		else if (read_on[curr_terminal] == 1 && keycode == RETURN){
-			printf("\n");
-			read_return[curr_terminal] = 1;
+
+		/* Return Press During Read */
+		else if (read_on[display_terminal] == 1 && keycode == RETURN){
+			printf("\n"); 		// New Line for Return Press
+			read_return[display_terminal] = 1;
 			update_terminal_buf(KEYS,keycode);
 		}
 		
-		else if (caps_on == 1){
-			if((read_on[curr_terminal] == 1 && index[curr_terminal] < BUFFER_SIZE) || read_on[curr_terminal] == 0)
-			caps_on_handler(keycode);
-		}
-		else if (shift_press > 0){
-			if((read_on[curr_terminal] == 1 && index[curr_terminal] < BUFFER_SIZE) || read_on[curr_terminal] == 0)
-				printf("%c", shift_keys[keycode - 1]);
-			update_terminal_buf(SHIFT_KEYS, keycode);
-		}
-
+		/* ALT-Function Press */
 		else if(alt_press > 0 && (keycode == F1 || keycode == F2 || keycode == F3)){
 			switch(keycode){
 				case F1:
@@ -122,23 +118,36 @@ void keyboard_handler(int i)
 					break;
 			}
 		}
+
+		/* Caps On */
+		else if (caps_on == 1){
+			caps_on_handler(keycode);
+		}
+
+		/* Shift Press */
+		else if (shift_press > 0){
+			printf("%c", shift_keys[keycode - 1]);
+			update_terminal_buf(SHIFT_KEYS, keycode);
+		}
+
+		/* Normal Press */
 		else{
-			if((read_on[curr_terminal] == 1 && index[curr_terminal] < BUFFER_SIZE) || read_on[curr_terminal] == 0)
-				printf("%c", keys[keycode - 1]);
+			printf("%c", keys[keycode - 1]);
 			update_terminal_buf(KEYS, keycode);
 		}
 
 	}
+
+	/* Condition Key Releases */
 	else if (keycode == (ALT + KEY_RELEASE_VALUE))
 		alt_press -= 1;
-
 	else if(keycode == (L_SHIFT + KEY_RELEASE_VALUE) || keycode == (R_SHIFT + KEY_RELEASE_VALUE))
 		shift_press -= 1;
-
 	else if (keycode == (CTRL + KEY_RELEASE_VALUE))
 		ctrl_press -= 1;
 
-
+	/* Key Press Serviced */
+	key_press = 0;
 	send_eoi(KEYBOARD_IRQ);
 }
 
@@ -148,7 +157,7 @@ void keyboard_handler(int i)
    Input : keycode -- scancode of key pressed
    Output : Returns 1 if keycode is letter
    			0 otherwise
-   Side Effect : Checks for a letter
+   Side Effect : Checks if keycode is a letter
 */
 int letter_check(unsigned char keycode)
 {
@@ -167,52 +176,85 @@ int letter_check(unsigned char keycode)
    Prints out according to keycode
    Input : keycode -- scancode of key pressed
    Output : None
-   Side Effect : Calls letter_check function
+   Side Effect : Calls letter_check function & update_terminal_buf
    				 Updates the Char terminal_buffer
    				 Prints to Screen corresponding string
 */
 void caps_on_handler(unsigned char keycode)
 {
-	int32_t curr_terminal = get_current_terminal();
-	/* Shift is pressed with Caps On */
+	/* Shift Pressed with Caps On */
 	if(shift_press > 0){
 		 /* Use lowercase keys for letters */
 		if(letter_check(keycode)){
 			printf("%c", keys[keycode - 1]);
-			if(read_on[curr_terminal] == 1 && index[curr_terminal] < BUFFER_SIZE){
-				terminal_buf[curr_terminal][index[curr_terminal]] = keys[keycode - 1];
-				index[curr_terminal]++;
-			}
+			update_terminal_buf(KEYS, keycode);
 		}
 		/* Use shift version of keys for all others*/
 		else{
 			printf("%c", shift_keys[keycode - 1]);
-			if(read_on[curr_terminal] == 1 && index[curr_terminal] < BUFFER_SIZE){
-				terminal_buf[curr_terminal][index[curr_terminal]] = shift_keys[keycode - 1];
-				index[curr_terminal]++;
-			}
+			update_terminal_buf(SHIFT_KEYS, keycode);
 		}
 	}
-	/* Shift is not pressed */
+	/* Shift Not Pressed with Caps On */
 	else{
 		/* Use uppercase keys for letters */
 		if(letter_check(keycode)){
 			printf("%c", shift_keys[keycode - 1]);
-			if(read_on[curr_terminal] == 1 && index[curr_terminal] < BUFFER_SIZE){
-				terminal_buf[curr_terminal][index[curr_terminal]] = shift_keys[keycode - 1];
-				index[curr_terminal]++;
-			}
+			update_terminal_buf(SHIFT_KEYS, keycode);
 		}
 		/* use normal version of keys for all others */
 		else{
 			printf("%c", keys[keycode - 1]);
-			if(read_on[curr_terminal] == 1 && index[curr_terminal] < BUFFER_SIZE){
-				terminal_buf[curr_terminal][index[curr_terminal]] = keys[keycode - 1];
-				index[curr_terminal]++;
-			}
+			update_terminal_buf(KEYS, keycode);
 		}
 	}
 }
+
+/* remap_user_video_and_memcpy
+   Remaps User_Video and memcopies from a given addr to a given addr 
+   Memcpy's size of screen
+   Input : remap_to_addr -- the address to copy data to and to map USER_VIDEO to
+   		   remap_from_addr -- the address to copy data from 
+   		   pg_dir -- the page directory to remap 
+   Output : None
+   Side Effect : The pg-dir gets remapped
+   remap_to_addr now contains the same memory as remap_from_addr 				 
+*/
+void remap_user_video_and_memcpy(int32_t remap_to_addr, int32_t remap_from_addr, pde_t* pg_dir) 
+{
+	/* Check for Invalid Args dest/source */
+	if (remap_to_addr == NULL || remap_from_addr == NULL) {
+		LOG("Invalid address.\n");
+		return;
+	}
+	/* Remap the page */
+	if (pg_dir != NULL) {
+		remap_page(USER_VIDEO, remap_to_addr, PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, pg_dir);
+	}
+	/* Copy Data */
+	memcpy((char *)remap_to_addr, (char *)remap_from_addr, (NUM_COLS * (NUM_ROWS) * 2));
+}
+
+/* get_video_buf_for_terminal
+   Returns the terminal's video buffer 
+   Input : terminal_num -- number of terminal
+   Output : One of three video buffers, depending on the given terminal
+   Side Effect : None  				    				 
+*/
+int32_t get_video_buf_for_terminal(int32_t terminal_num) {
+	switch(terminal_num){
+		case TERMINAL_1:
+			return VIDEO_BUF_1;
+		case TERMINAL_2:
+			return VIDEO_BUF_2;
+		case TERMINAL_3:
+			return VIDEO_BUF_3;
+		default:
+			LOG("Should not happen! Current Terminal does not exist??\n");
+			return NULL;
+	}
+}
+
 
 /* change_terminal function
    Function handles switching terminals (ALT + FUNCTION-KEY)
@@ -227,110 +269,67 @@ void change_terminal(int32_t new_terminal)
 {
 	/* Check to make sure that the new_terminal is not the same
 	   as the terminal displayed now */
-	int32_t curr_terminal = get_displayed_terminal();
-	if(new_terminal == curr_terminal){
+	int32_t old_terminal = get_displayed_terminal();
+	if(new_terminal == old_terminal){
 		LOG("You are already in this terminal! Cannot Switch!\n");
 		return;
 	}
 
+	/* Case where we try to launch shell with max_num_process already running */
 	if(num_progs[TERMINAL_1] + num_progs[TERMINAL_2] + num_progs[TERMINAL_3] >= MAX_NUM_PROCESS && 
 	   num_progs[new_terminal] == 0){
 	   	printf("Reached maximum number of programs! Can't fire new shell in new terminal!391OS> ");
 		return;
 	}
 
-	/* Grab the current page dir for remapping */
-	pcb_t* pcb_ptr = get_pcb_ptr();
+	/* Grab the page dir for the old terminal */
+	pcb_t* pcb_ptr = top_process[old_terminal]; 
 	pde_t* current_pg_dir = pcb_ptr->pg_dir;
 
-	/* Copy Video Memory into the Buffer corresponding to the current terminal
-	   Remap the current page dir to map the physical buffer as the video */
-	switch(curr_terminal){
-		case TERMINAL_1:
-			remap_page(USER_VIDEO, VIDEO_BUF_1, 
-			PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, current_pg_dir);
-			memcpy((char *)VIDEO_BUF_1, (char *)VIDEO, (NUM_COLS * (NUM_ROWS) * 2));
-			break;
-		case TERMINAL_2:
-			remap_page(USER_VIDEO, VIDEO_BUF_2, 
-			PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, current_pg_dir);
-			memcpy((char *)VIDEO_BUF_2, (char *)VIDEO, (NUM_COLS * (NUM_ROWS) * 2));
-			break;
-		case TERMINAL_3:
-			remap_page(USER_VIDEO, VIDEO_BUF_3, 
-			PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, current_pg_dir);
-			memcpy((char *)VIDEO_BUF_3, (char *)VIDEO, (NUM_COLS * (NUM_ROWS) * 2));
-			break;
-		default:
-			LOG("Should not happen! Current Terminal does not exist??\n");
-			return;
-	}
-
+	/* Grab the page dir for new terminal */
 	pcb_t* top_pcb = top_process[new_terminal];
+	pde_t* new_term_pg_dir;
+	if(top_pcb == NULL)
+		new_term_pg_dir = NULL;
+	else
+		new_term_pg_dir = top_pcb -> pg_dir;
 
-	/* Copy the right video buf into video mem */
-	switch(new_terminal){
-		case TERMINAL_1:
-			if(top_pcb != NULL)
-				remap_page(USER_VIDEO, VIDEO, 
-				PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, top_pcb -> pg_dir);
-			memcpy((char *)VIDEO, (char *)VIDEO_BUF_1, (NUM_COLS * (NUM_ROWS) * 2));		
-			break;
-		case TERMINAL_2:
-			if(top_pcb != NULL)
-				remap_page(USER_VIDEO, VIDEO, 
-				PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, top_pcb -> pg_dir);
-			memcpy((char *)VIDEO, (char *)VIDEO_BUF_2, (NUM_COLS * (NUM_ROWS) * 2));
-			break;
-		case TERMINAL_3:
-			if(top_pcb != NULL)
-				remap_page(USER_VIDEO, VIDEO, 
-				PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, top_pcb -> pg_dir);
-			memcpy((char *)VIDEO, (char *)VIDEO_BUF_3, (NUM_COLS * (NUM_ROWS) * 2));
-			break;
-		default:
-			LOG("Cannot switch into terminal. Chosen terminal does not exist!\n");
-			return;
-	}
+	/* Copy mem (video->buf) and remap page (USER_VIDEO -> BUF) for the old_terminal*/
+	remap_user_video_and_memcpy(get_video_buf_for_terminal(old_terminal), VIDEO, current_pg_dir);
+	
+	/* Copy mem (buf-> video) and remap page (USER_VIDEO -> VIDEO) for the new_terminal */
+	remap_user_video_and_memcpy(VIDEO, get_video_buf_for_terminal(new_terminal), new_term_pg_dir);
+
+	/* Flush TLB */
+	set_cr3_reg(get_pcb_ptr() -> pg_dir);
 
 	/* Update the displayed terminal*/
 	displayed_terminal = new_terminal;
 
 	/* If the the new terminal is not executing any programs, Execute Shell */
 	if(num_progs[new_terminal] == 0){
-		send_eoi(KEYBOARD_IRQ);		//Send EOI for ALT+FUNCTION-KEY
-	
-		asm volatile("sti;");	
+		key_press = 0;	// Will not return to keyboardhandler, update key_press	
 
+		pcb_t* curr_ptr = get_pcb_ptr();
 		uint8_t exec_cmd[15] = "shell";
-		pcb_ptr -> esp0 = tss.esp0; 
+
+		/* Save info for scheduling */
+		curr_ptr -> esp0 = tss.esp0; 
 		asm volatile("movl %%esp, %0;" 
-	 		"movl %%ebp, %1;" : 
-	 		"=b" (pcb_ptr -> esp),
-	 		"=c" (pcb_ptr -> ebp));
+	  		"movl %%ebp, %1;" : 
+	  		"=b" (curr_ptr -> esp),
+	  		"=c" (curr_ptr -> ebp));
+
+		send_eoi(KEYBOARD_IRQ);		//Send EOI for ALT+FUNCTION-KEY
 
 		/* Execute a Shell */
 		if(-1 == sys_execute(exec_cmd)){
 			LOG("Executing new shell from new terminal failed!\n");
 		}
 	}
+	/* Proc exists in new_terminal */
 	else{
-		/* Else update the screen with the previous x,y
-		 * Flush the TLB's */
-	 	send_eoi(KEYBOARD_IRQ);
-	 	set_cr3_reg(top_pcb -> pg_dir);
 	 	update_cursor(screen_y[new_terminal],screen_x[new_terminal]);
-	 	pcb_ptr -> esp0 = tss.esp0;
-	 	asm volatile("movl %%esp, %0;" 
-	 		"movl %%ebp, %1;" : 
-	 		"=b" (pcb_ptr -> esp),
-	 		"=c" (pcb_ptr -> ebp));
-
-	 	tss.esp0 = top_pcb -> esp0;
-		asm volatile("movl %0, %%esp;" 
-			"movl %1, %%ebp;":: 
-			"b" (top_pcb -> esp),
-			"c" (top_pcb -> ebp));
 	}
 }
 
@@ -395,11 +394,6 @@ int32_t terminal_read(uint32_t dummy, uint8_t* buf,uint32_t nbytes)
 	int32_t curr_terminal = get_current_terminal();
 	index[curr_terminal] = 0;		// Initalize index
 	read_on[curr_terminal] = 1;	// Currently reading
-	int i = 0;
-	for(i=0;i < nbytes;i++)
-	{
-		buf[i]='\0';
-	}
 	
 	/* Wait Until reached the num bytes requested
 	 * Or line terminated with enter
@@ -440,22 +434,23 @@ int32_t terminal_write(uint32_t dummy, uint32_t dummy1, const uint8_t* buf, uint
 {	
 	int i;
 	int n = 0;
-	if(buf == NULL)
+
+	/* Invalid Args */
+	if(buf == NULL || nbytes <= 0)
 		return -1;
-	if(nbytes <= 0)
-		return -1;
+
 	/* Print string in buf until 
 	 * Reached End of String */
 	for (i = 0; i < nbytes; i++) {
+		/* Don't print Null characters */
 		if (buf[i] != NULL) {
 			putc(buf[i]);
 			n++;
-		} else {
-		}
+		} 
 	}
+
 	/* Return # of bytes written */
-	return i + 1;
-	//return (n == 0)? -1 : n;
+	return n; 
 }
 
 /* update_terminal_buf function
@@ -467,24 +462,30 @@ int32_t terminal_write(uint32_t dummy, uint32_t dummy1, const uint8_t* buf, uint
 */
 void update_terminal_buf(int n, char keycode)
 {
-	int32_t curr_terminal = get_current_terminal();
-	if(n == KEYS){
-		if(read_on[curr_terminal] == 1 && index[curr_terminal] < BUFFER_SIZE){
-			terminal_buf[curr_terminal][index[curr_terminal]] = keys[keycode - 1];
-			index[curr_terminal]++;
+	int32_t display_terminal = get_displayed_terminal();
+	/* Update Only if Reading */
+	if(read_on[display_terminal] == 1){
+		/* Update with lowercase version of key */
+		if(n == KEYS){
+			if(index[display_terminal] < BUFFER_SIZE){
+				terminal_buf[display_terminal][index[display_terminal]] = keys[keycode - 1];
+				index[display_terminal]++;
+			}
 		}
-	}
-	else if (n == SHIFT_KEYS){
-		if(read_on[curr_terminal] == 1 && index[curr_terminal] < BUFFER_SIZE){
-			terminal_buf[curr_terminal][index[curr_terminal]] = shift_keys[keycode - 1];
-			index[curr_terminal]++;
+		/* Update with shifted version of key*/
+		else if (n == SHIFT_KEYS){
+			if(index[display_terminal] < BUFFER_SIZE){
+				terminal_buf[display_terminal][index[display_terminal]] = shift_keys[keycode - 1];
+				index[display_terminal]++;
+			}
 		}
-	}
-	else if(n == BACK){
-		if(index[curr_terminal] != 0 && read_on[curr_terminal] == 1){
-			backspace();
-			terminal_buf[curr_terminal][index[curr_terminal] - 1] = NULL;
-			index[curr_terminal]--;
+		/* Backspace is pressed, update accordingly */
+		else if(n == BACK){
+			/* Only update buf if not at start of buf */
+			if(index[display_terminal] != 0){	
+				terminal_buf[display_terminal][index[display_terminal] - 1] = NULL;
+				index[display_terminal]--;
+			}
 		}
 	}
 }
@@ -515,4 +516,14 @@ void test_terminal(void)
 			}
 		}
 	}
+}
+
+/* get_key_press function
+   Input : None
+   Output : Returns if a key was pressed 
+   Side Effect : None
+*/
+int get_key_press(void)
+{
+	return key_press;
 }

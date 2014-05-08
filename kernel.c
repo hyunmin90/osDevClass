@@ -12,6 +12,7 @@
 #include "rtc.h"
 #include "keyboard.h"
 #include "file_system.h"
+#include "scheduler.h"
 
 /* Macros. */
 /* Check if the bit BIT in FLAGS is set. */
@@ -158,9 +159,14 @@ entry (unsigned long magic, unsigned long addr)
 	/* Enable RTC interrupt */
 	rtc_init();
 	enable_irq(RTC_IRQ);
+	
 
 	/* Enbale Keyboard interrupt */
 	enable_irq(KEYBOARD_IRQ);
+	
+	
+	/*Enable PIT interrupt*/
+	enable_irq(PIT_IRQ);
 	
 	/* Initialize devices, memory, filesystem, enable device interrupts on the
 	 * PIC, any other initialization stuff... */
@@ -181,7 +187,8 @@ entry (unsigned long magic, unsigned long addr)
 	terminal_open();
 	/* Test file_system driver */
     //test_file_system_driver();
-
+	//Test for pit
+	pit_init(0,2,20);
     /* Test the RTC driver */
 	//rtc_test();
 	while(1){

@@ -90,6 +90,7 @@ pcb_t* get_global_pcb(){
   index of this pointer in global_pcb_ptrs.
   This index is used for statically assigning PCB, physical pages, page directories
   for different processes
+  Input : pcb_ptr -- the pcb_ptr of the process
   Output : Index of given pcb_ptr in global_pcb_ptrs
            -1 if not found
  */

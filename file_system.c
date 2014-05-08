@@ -5,9 +5,13 @@
 #include "paging.h"
 #include "pcb.h"
 
+/* Contains file system's statistics information. 64 Bytes in size */
 fs_stat_t fs_stat;
+/* Array of Directory Entries. At most 63 elements. Each Dentry is 64Bytes long */
 dentry_t* dentries;
+/* Array of Inodes. Each Inode is 4KB */
 inode_t* inodes;
+/* Array of data blocks. Each data block is 4KB in size */
 data_block_t* data_blocks;
 
 /* init_file_system()
@@ -223,6 +227,17 @@ int32_t read_file(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t le
     }
 }
 
+/* read_file_wrapper()
+   Given file descriptor of file, read the file's data starting from offset location,
+   and at most length bytes, into buffer array
+   Input : fd -- file descriptor of the file to be read
+           buf -- array to be filled in with read data
+           length -- the maximum number of bytes to be read
+   Output : Number of read bytes,
+            -1 on failure(invalid buf pointer, NULL inode pointer,
+             and invalid block number accessed outside of range)
+   Side Effects : buf array filled with copied data from the file
+*/
 int32_t read_file_wrapper(int32_t fd, uint8_t* buf, uint32_t length){
   pcb_t* pcb = get_pcb_ptr();
   inode_t* inode_ptr = (((pcb -> file_array)[fd]).inode_ptr);
@@ -340,6 +355,15 @@ int32_t read_dir(inode_t* inode_ptr, uint32_t offset, uint8_t* buf, uint32_t len
     }
 }
 
+/* read_dir_wrapper()
+   Given the fd of the directory, read the (fd's offset)'th directory entry's file name,
+   at most length bytes, into buffer array
+   Input : fd -- file descriptor of the directory that's open
+           buf -- array to be filled in with file name
+           length -- the maximum number of bytes to be read
+   Output : Number of read bytes
+   Side Effects : buf array filled with copied file name from the file
+*/
 int32_t read_dir_wrapper(int32_t fd, uint8_t* buf, uint32_t length){
   pcb_t* pcb = get_pcb_ptr();
   inode_t* inode_ptr = (((pcb -> file_array)[fd]).inode_ptr);

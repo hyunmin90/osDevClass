@@ -3,7 +3,7 @@
 
 #include "types.h"
 
-extern int32_t halt(uint32_t status);
+extern int32_t halt(uint8_t status);
 
 extern int32_t sys_execute(const uint8_t* command);
 

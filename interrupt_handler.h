@@ -18,6 +18,7 @@
 #define VEC_KEYBOARD_INT 		0x21
 #define VEC_RTC_INT 			0x28
 #define VEC_SYSTEM_CALL 		0x80
+#define VEC_PIT_INT				0x20
 
 #define USER_LEVEL				3
 #define KERNEL_LEVEL			0
@@ -91,5 +92,7 @@ asm ( \
 
 /* Inits IDT Table */
 void init_idt(void);
+
+extern int32_t is_exception;
 
 #endif

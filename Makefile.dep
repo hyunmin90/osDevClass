@@ -4,20 +4,25 @@ syscall_table.o: syscall_table.S
 x86_desc.o: x86_desc.S x86_desc.h types.h
 file_system.o: file_system.c file_system.h types.h lib.h keyboard.h \
   paging.h x86_desc.h pcb.h
-i8259.o: i8259.c i8259.h types.h lib.h keyboard.h
+i8259.o: i8259.c i8259.h types.h lib.h keyboard.h paging.h x86_desc.h
 interrupt_handler.o: interrupt_handler.c interrupt_handler.h x86_desc.h \
-  types.h pcb.h file_system.h paging.h lib.h keyboard.h debug.h rtc.h
+  types.h pcb.h file_system.h paging.h lib.h keyboard.h debug.h rtc.h \
+  i8259.h scheduler.h
 kernel.o: kernel.c multiboot.h types.h x86_desc.h lib.h keyboard.h \
-  i8259.h debug.h paging.h interrupt_handler.h pcb.h file_system.h rtc.h
-keyboard.o: keyboard.c keyboard.h types.h lib.h x86_desc.h i8259.h pcb.h \
-  file_system.h paging.h system_call.h debug.h
-lib.o: lib.c lib.h types.h keyboard.h
+  paging.h i8259.h debug.h interrupt_handler.h pcb.h file_system.h rtc.h \
+  scheduler.h
+keyboard.o: keyboard.c keyboard.h types.h paging.h x86_desc.h lib.h \
+  i8259.h pcb.h file_system.h system_call.h debug.h
+lib.o: lib.c lib.h types.h keyboard.h paging.h x86_desc.h
 paging.o: paging.c paging.h x86_desc.h types.h lib.h keyboard.h pcb.h \
   file_system.h debug.h
 pcb.o: pcb.c pcb.h file_system.h types.h paging.h x86_desc.h lib.h \
   keyboard.h rtc.h debug.h
-rtc.o: rtc.c rtc.h types.h lib.h keyboard.h i8259.h
+rtc.o: rtc.c rtc.h types.h lib.h keyboard.h paging.h x86_desc.h i8259.h
+scheduler.o: scheduler.c scheduler.h types.h pcb.h file_system.h paging.h \
+  x86_desc.h debug.h lib.h keyboard.h i8259.h
 syscall_exec.o: syscall_exec.c x86_desc.h types.h lib.h keyboard.h \
-  file_system.h system_call.h pcb.h paging.h debug.h
+  paging.h file_system.h system_call.h pcb.h debug.h
 system_call.o: system_call.c system_call.h types.h lib.h keyboard.h \
-  syscall_exec.h file_system.h rtc.h pcb.h paging.h x86_desc.h debug.h
+  paging.h x86_desc.h syscall_exec.h file_system.h rtc.h pcb.h debug.h \
+  interrupt_handler.h

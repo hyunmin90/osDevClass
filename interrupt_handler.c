@@ -5,6 +5,8 @@
 #include "keyboard.h"
 #include "rtc.h"
 #include "pcb.h"
+#include "i8259.h"
+#include "scheduler.h"
 
 /* Build assembly linkages for exceptions */
 BUILD_IRQ(0x00)
@@ -72,6 +74,8 @@ static void (*interrupt[NR_IRQS])(void) = {
     IRQ0x2f_interrupt
 };
 
+int32_t is_exception = 0;
+
 /* common_handler()
    A common interrupt handler that gets called every time an exception,
    interrupt, or system call is invoked.
@@ -87,24 +91,24 @@ void common_handler(int i) {
     if(i >= VEC_LOWEST_EXCEPTION && i <= VEC_HIGHEST_EXCEPTION) {
         /* Call Halt to Squash Exceptions */
         printf("Exception %x Reached\n", i);
-        asm volatile("movl $1, %%eax; movl %0, %%ebx;int $0x80;"::"b"(256));
+        is_exception = 1;
+        asm volatile("movl $1, %eax; int $0x80;");
     } 
     /* Regular Interrupts */
     else if (i >= VEC_LOWEST_IRQ && i <= VEC_HIGHEST_IRQ) {
-        if (i == VEC_KEYBOARD_INT) {
+		if(i==VEC_PIT_INT)
+		{
+			pit_handler();
+		}
+	
+        else if (i == VEC_KEYBOARD_INT) {
             /* In case of keyboard interrupt, hand control over to keyboard_handler */
             keyboard_handler(i);
         } else if(i == VEC_RTC_INT) {
             /* In case of RTC interrupt, hand control over to rtc_handler */
-            
-			
+           
+		
 			rtc_handler(i);	
-			if(rtcreadcalled==1) //Check to see if RTC read has been called.
-			{	
-				
-				RTCreadCheck=1000;//RTC int has been called. Now exit the read loop
-			
-			}
 			
 		
 		} else {

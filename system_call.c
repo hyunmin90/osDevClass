@@ -7,39 +7,55 @@
 #include "x86_desc.h"
 #include "debug.h"
 #include "keyboard.h" // only for NUM_TERMINALS
+#include "interrupt_handler.h"
 
 #define FD_ENTRY_MIN 2
 #define FD_ENTRY_MAX 7
 #define HALT_ARG_BITMASK 0xFF
 #define TASK_BEGIN_VIRT_ADDR 0x8048000
+#define HALT_DUE_TO_EXCEPTION 256
 
 extern void* halt_ret;
 extern file_ops_t file_ops_ptrs[FILE_OPS_PTRS_SIZE];
 extern inode_t* inodes;
 
-////////
 pcb_t* top_process[NUM_TERMINALS] = {NULL, NULL, NULL}; 	// Top Running Process's PCB in terminal	
 int32_t num_progs[NUM_TERMINALS] = {0, 0 ,0};				// # of Progs running in each Terminal
-///////////
 
-/* Halt Function
+/* halt()
    Halt System Call
    Terminates Caller Process
    Returns to Parent Process 
-   Input : status -- 
+   Input : status -- status given by the user program that should be eventually passed to user
+   				     who first called system call Execute.
    Output : Returns 1 if keycode is letter
    			0 otherwise
    Side Effect : Checks for a letter
 */
-int32_t halt(uint32_t status)
+int32_t halt(uint8_t status)
 {
-	// TODO: Need to expand 8-bit argument into 32-bit
-	// STATUS needs to be uint32_t
-	LOG("halt with status %d\n", status);
+	uint32_t status_32bit;
+	/* Expand 8-bit argument into 32-bit. If exception caused halt, use 256 as status */
+	if (is_exception) {
+		status_32bit = HALT_DUE_TO_EXCEPTION;
+		// It's safe to do so, because whenever execption handler is reached, it's called inside CLI.
+		is_exception = 0;
+	} else {
+		status_32bit = status;
+	}
+	LOG("halt with status %d\n", status_32bit);
 
 	pcb_t* current_pcb_ptr = get_pcb_ptr();
 	pcb_t* parent_pcb_ptr = current_pcb_ptr->parent_pcb;
 	int32_t current_terminal = get_current_terminal();
+
+	/* Close opened files except for stdin, stdout */
+	int i;
+	for (i = FD_ENTRY_MIN; i <= FD_ENTRY_MAX; i++) {
+		if (current_pcb_ptr -> file_array[i].flags) {
+			sys_close(i);
+		}
+	}
 
 	if(num_progs[current_terminal] == 1){
 		tss.esp0 = PHYSICAL_MEM_8MB - (KERNEL_STACK_SIZE * (get_proc_index(current_pcb_ptr) + 1));
@@ -64,8 +80,15 @@ int32_t halt(uint32_t status)
 		LOG("No parent PCB pointer presents.\n");
 		return -1;
 	}
+	
+	if (current_terminal == get_displayed_terminal()) {
+		remap_page(USER_VIDEO, VIDEO,
+			PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, parent_pcb_ptr -> pg_dir);
+	} else {
+		remap_page(USER_VIDEO, get_video_buf_for_terminal(current_terminal),
+			PAGING_USER_SUPERVISOR | PAGING_READ_WRITE, parent_pcb_ptr -> pg_dir);
+	}
 
-	// TODO: POINT ESP0 to bottom of the system call ?
 	// TSS:esp0 <- parent's esp0
 	tss.esp0 = parent_pcb_ptr->esp0;
 	// TSS:ss0 <- parent's ss0
@@ -78,18 +101,14 @@ int32_t halt(uint32_t status)
 		LOG("Fatal error while tearing down page directory.\n");
 	}
 
-	///////////////////
 	/* Since we are Halting, update the top process 
 	as the parent process. Decrement the num_progs */
     top_process[current_terminal] = parent_pcb_ptr;
     num_progs[current_terminal]--;
-    //////////////////
 
 	if(destroy_pcb_ptr(current_pcb_ptr) != 0) {
 		LOG("Cannot Destroy PCB_ptr no matching PCB found.\n");
 	}
-
-
 
 	/* update esp to point to top of parent's kernel stack
 	   update ebp
@@ -97,8 +116,8 @@ int32_t halt(uint32_t status)
 	asm volatile("movl %0, %%eax;"
 				 "movl %1, %%esp;"
 				 "movl %2, %%ebp;"::
-				 "a" ((int32_t)status), 
-				 "b" (parent_pcb_ptr->esp0),
+				 "a" (status_32bit), 
+				 "b" (parent_pcb_ptr->esp),
 				 "c" (parent_pcb_ptr->ebp));
 
 	/* Jump to sys_exec */
@@ -184,8 +203,7 @@ int32_t sys_open (const uint8_t* filename)
 	}
 	/* Check for existing filename */
 	dentry_t curr_file;
-	uint32_t i = read_dentry_by_name(filename, &curr_file);
-	if(i == -1)
+	if(read_dentry_by_name(filename, &curr_file) == -1)
 		return -1;
 
 	/* Update pcb according to filetype */
@@ -196,15 +214,12 @@ int32_t sys_open (const uint8_t* filename)
 		(pcb_ptr->file_array)[fd_index].file_ops = &file_ops_ptrs[RTC_FILE_OPS_IDX];
 	} else if (curr_file.file_type == FILE_TYPE_DIR) {
 		(pcb_ptr->file_array)[fd_index].file_ops = &file_ops_ptrs[DIR_FILE_OPS_IDX];
-		(pcb_ptr->file_array)[fd_index].file_position = i;
 	} else {
 		(pcb_ptr->file_array)[fd_index].file_ops = &file_ops_ptrs[REG_FILE_OPS_IDX];
 	}
 
 	/* Call Open Function */
-	int32_t open_success;
-	open_success = (((pcb_ptr -> file_array)[fd_index]).file_ops -> open)((int32_t) filename);
-	if(open_success == -1)
+	if((((pcb_ptr -> file_array)[fd_index]).file_ops -> open)((int32_t) filename) == -1)
 		destroy_fd(pcb_ptr, fd_index);
 
 	return fd_index;
@@ -288,27 +303,8 @@ int32_t sys_vidmap(uint8_t** screen_start)
 		return -1;
 
 	
-	// get current pcb and following page directory
-	pcb_t* pcb_ptr = get_pcb_ptr();
-	pde_t* current_pg_dir = pcb_ptr->pg_dir;
-
-	// get a page table from current page directory
-	// pick a space in virtual memory address, and use given physical address(0xB8000)
-	// the space should not be overlapped with 'important' part of the page directory,
-	// such as the one with kernel, or the user.
-	if(map_page_vid((TASK_BEGIN_VIRT_ADDR + PAGE_SIZE_4M), VIDEO,
-	 PAGING_USER_SUPERVISOR | PAGING_READ_WRITE | PAGING_GLOBAL_PAGE, current_pg_dir) != 0) {
-
-		LOG("Failed to map virtual memory for new process\n");
-        return -1;
-	}
-
-    // so the *screen_start can point to modified page table
-
-    *screen_start = (uint8_t*)(TASK_BEGIN_VIRT_ADDR + PAGE_SIZE_4M);
-
-    // or, do 4kb paging directly instead.
-    //*screen_start = (uint8_t*)(VIDEO);
+    // 4kb paging directly instead. To Our virtual USER VIDEO
+    *screen_start = (uint8_t*)(USER_VIDEO);
 
 	return 0;
 }
